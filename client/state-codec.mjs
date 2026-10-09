@@ -1,5 +1,5 @@
-export const ENTITY_BUCKETS={'records':'id','assignments':'id','incidents':'id','skillExams':'id','skillMap.records':'id','skillMap.employees':'employee'};
-export const META_KEYS=['checklistConfig','customImages','checklistChanges','skillExamCatalog','skillDeletedRecords'];
+export const ENTITY_BUCKETS={'bevelRecords':'id','records':'id','assignments':'id','incidents':'id','skillExams':'id','skillMap.records':'id','skillMap.employees':'employee'};
+export const META_KEYS=['bevelCatalog','checklistConfig','customImages','checklistChanges','skillExamCatalog','skillDeletedRecords'];
 export function canonical(value){if(Array.isArray(value))return '['+value.map(canonical).join(',')+']';if(value&&typeof value==='object')return '{'+Object.keys(value).sort().map(k=>JSON.stringify(k)+':'+canonical(value[k])).join(',')+'}';return JSON.stringify(value)}
 export function docKey(bucket,key){return JSON.stringify([bucket,String(key)])}
 export function flattenState(state){
@@ -14,7 +14,7 @@ export function flattenState(state){
  return docs;
 }
 export function stateFromEntries(entries){
- const result={records:[],assignments:[],incidents:[],skillExams:[],skillMap:{version:1,records:[],employees:[],currentByEmployee:{},criteria:null}};
+ const result={bevelRecords:[],records:[],assignments:[],incidents:[],skillExams:[],skillMap:{version:1,records:[],employees:[],currentByEmployee:{},criteria:null}};
  for(const e of entries){if(e.value===null)continue;if(ENTITY_BUCKETS[e.bucket]){if(e.bucket.startsWith('skillMap.'))result.skillMap[e.bucket.split('.')[1]].push(structuredClone(e.value));else result[e.bucket].push(structuredClone(e.value))}else if(e.bucket==='meta'&&META_KEYS.includes(e.key))result[e.key]=structuredClone(e.value);else if(e.bucket==='skillMap.meta')Object.assign(result.skillMap,structuredClone(e.value))}
  // Current result is derived from records, never from a client's stale pointer.
  result.skillMap.currentByEmployee={};

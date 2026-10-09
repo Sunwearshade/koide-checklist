@@ -10,9 +10,10 @@
     "start": "node --env-file=.env src/server.mjs",
     "init-db": "node --env-file=.env scripts/manage.mjs init",
     "import-employees": "node --env-file=.env scripts/manage.mjs employees",
-    "test": "node tests/rules.test.mjs && node tests/client.test.mjs && node tests/access.test.mjs",
+    "test": "node tests/rules.test.mjs && node tests/client.test.mjs && node tests/access.test.mjs && node tests/parameters.test.mjs && node tests/measurement-import.test.mjs",
     "test:mysql": "node --env-file=.env tests/mysql.test.mjs",
-    "update-access": "node --env-file=.env scripts/manage.mjs access"
+    "update-access": "node --env-file=.env scripts/manage.mjs access",
+    "import-measurements": "node --env-file=.env scripts/import-measurement.mjs"
   },
   "dependencies": {
     "mysql2": "3.24.4"
