@@ -1,4 +1,4 @@
-let serverEntries=[],serverBaseline=null,serverSession=null,serverOutbox=null,serverBusy=false;
+let serverEntries=[],serverBaseline=null,serverSession=null,serverOutbox=null,serverBusy=false;const serverUuid=()=>{if(crypto.randomUUID)return crypto.randomUUID();const b=crypto.getRandomValues(new Uint8Array(16));b[6]=b[6]&15|64;b[8]=b[8]&63|128;const h=[...b].map(x=>x.toString(16).padStart(2,'0')).join('');return h.slice(0,8)+'-'+h.slice(8,12)+'-'+h.slice(12,16)+'-'+h.slice(16,20)+'-'+h.slice(20)};
 const apiURL=path=>new URL('api/'+path,location.href.endsWith('/')?location.href:new URL('.',location.href));
 async function serverRequest(path,options={}){
  const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),45000);
@@ -18,7 +18,7 @@ async function serverCommit(next){
  if(serverBusy)throw Error('Hay un envío en curso. Espera a que termine.');
  if(!serverSession?.canWrite)throw Error('Tu cuenta no tiene permiso de captura.');
  serverBusy=true;
- try{if(await outbox(false))throw Error('Existe un envío pendiente. Usa «Reintentar envío» antes de guardar otro registro.');const changes=diffState(serverBaseline,next,serverEntries);if(!changes.length)return;const payload={requestId:crypto.randomUUID(),changes};await outbox(true,{user:serverSession.user,payload,created:new Date().toISOString()});await sendServerPending()}
+ try{if(await outbox(false))throw Error('Existe un envío pendiente. Usa «Reintentar envío» antes de guardar otro registro.');const changes=diffState(serverBaseline,next,serverEntries);if(!changes.length)return;const payload={requestId:serverUuid(),changes};await outbox(true,{user:serverSession.user,payload,created:new Date().toISOString()});await sendServerPending()}
  finally{serverBusy=false;await drawServerStatus()}
 }
 async function sendServerPending(){

@@ -1,0 +1,16 @@
+{
+  "apps": [
+    {
+      "name": "koide-checklist",
+      "script": "src/server.mjs",
+      "node_args": "--env-file=.env",
+      "cwd": "C:\\SystemKoide\\koide-checklist",
+      "autorestart": true,
+      "max_restarts": 20,
+      "restart_delay": 3000,
+      "max_memory_restart": "700M",
+      "merge_logs": true,
+      "time": true
+    }
+  ]
+}
