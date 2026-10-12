@@ -5,7 +5,9 @@ import {read,save} from './store.mjs';
 import {session,unlockAdmin,unlockScope,changeKey} from './auth.mjs';
 import {requireValue} from './rules.mjs';
 const origin=new URL(process.env.PUBLIC_ORIGIN||'https://invalid.local');
-if(origin.protocol!=='https:'||origin.host==='invalid.local'||origin.pathname!=='/')throw Error('Configura PUBLIC_ORIGIN con la dirección HTTPS de IIS, sin subcarpeta.');
+// HTTP solo se acepta en localhost (desarrollo sin IIS). Cualquier otro host exige HTTPS.
+const local=origin.protocol==='http:'&&['localhost','127.0.0.1'].includes(origin.hostname);
+if((origin.protocol!=='https:'&&!local)||origin.host==='invalid.local'||origin.pathname!=='/')throw Error('Configura PUBLIC_ORIGIN con la dirección HTTPS de IIS, sin subcarpeta.');
 const pool=createPool(),max=Number(process.env.BODY_LIMIT_MB||64)*1024*1024;
 const page=fs.readFileSync(new URL('../public/index.html',import.meta.url));
 const json=(res,status,data)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify(data))};
@@ -15,7 +17,7 @@ async function body(req,limit=max){
  let size=0,chunks=[];for await(const chunk of req){size+=chunk.length;requireValue(size<=limit,'Solicitud demasiado grande.',413);chunks.push(chunk);}try{return JSON.parse(Buffer.concat(chunks).toString('utf8'))}catch{throw Object.assign(Error('JSON inválido.'),{status:400})}
 }
 const server=http.createServer(async(req,res)=>{
- res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','same-origin');res.setHeader('X-Frame-Options','DENY');res.setHeader('Strict-Transport-Security','max-age=31536000');
+ res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','same-origin');res.setHeader('X-Frame-Options','DENY');if(!local)res.setHeader('Strict-Transport-Security','max-age=31536000');
  res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-src 'self' about:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
  try{
   const path=new URL(req.url,origin).pathname;
@@ -45,5 +47,5 @@ const server=http.createServer(async(req,res)=>{
  }
 });
 server.requestTimeout=60000;server.headersTimeout=15000;
-server.listen(Number(process.env.PORT||3080),'127.0.0.1',()=>console.log('Checklist MySQL listo en loopback. Acceso público: '+origin.origin));
+server.listen(Number(process.env.PORT||3080),'127.0.0.1',()=>console.log(local?'Checklist MySQL listo. Abre: '+origin.origin:'Checklist MySQL listo en loopback. Acceso público: '+origin.origin));
 for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>server.close(async()=>{await pool.end();process.exit(0)}));

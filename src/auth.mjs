@@ -9,7 +9,9 @@ export async function passwordHash(password){requireValue(typeof password==='str
 export async function verifyPassword(password,stored){const [method,salt,key]=String(stored||'').split(':');if(method!=='scrypt'||!salt||!key)return false;const actual=await derive(password,salt),expected=Buffer.from(key,'hex');return actual.length===expected.length&&timingSafeEqual(actual,expected);}
 export const accessDefaults=JSON.parse(fs.readFileSync(new URL('../data/access-config.json',import.meta.url),'utf8'));
 export const accessScopes=['admin','parameters','management'];
-export const cookie=token=>`checklist_session=${token}; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=2592000`;
+// Sin Secure únicamente cuando PUBLIC_ORIGIN es HTTP (localhost de desarrollo; server.mjs rechaza HTTP en otros hosts).
+const secure=String(process.env.PUBLIC_ORIGIN||'').startsWith('http://')?'':' Secure;';
+export const cookie=token=>`checklist_session=${token}; HttpOnly;${secure} SameSite=Strict; Path=/; Max-Age=2592000`;
 export function tokenFrom(req){return /(?:^|;\s*)checklist_session=([a-f0-9]{64})(?:;|$)/.exec(req.headers.cookie||'')?.[1]||'';}
 export async function session(pool,req,res){
  let token=tokenFrom(req),rows=[];
