@@ -13,6 +13,8 @@ for(let i=0;i<20;i++){let station=structuredClone(empty);station.records.push({i
 assert.throws(()=>flattenState({records:[{id:'same'},{id:'same'}]}),/duplicado/);
 const tombstone={bucket:'records',key:'r1',value:null,version:3};assert.equal(diffState(stateFromEntries([tombstone]),next,[tombstone])[0].version,3);
 assert.equal(stateFromEntries([{bucket:'skillMap.records',key:'a',version:1,value:{id:'a',employee:'1',day:'2026-09-01',at:'1'}},{bucket:'skillMap.records',key:'b',version:1,value:{id:'b',employee:'1',day:'2026-09-02',at:'2'}}]).skillMap.currentByEmployee['1'],'b');
+const parameterState=structuredClone(empty);parameterState.bevelRecords=[{id:'REC-1',notes:'Registro'}];parameterState.bevelCatalog={SKU:{raw:'3x2x1',dims:['3','2','1'],issue:''}};parameterState.accessKeys={admin:{hash:'never-send'}};
+const parameterDelta=diffState(empty,parameterState,[]);assert.equal(parameterDelta.length,2);assert(!JSON.stringify(parameterDelta).includes('never-send'));const parameterRestored=stateFromEntries(parameterDelta.map(e=>({...e,version:1})));assert.deepEqual(parameterRestored.bevelRecords,parameterState.bevelRecords);assert.deepEqual(parameterRestored.bevelCatalog,parameterState.bevelCatalog);
 const html=fs.readFileSync(new URL('../public/index.html',import.meta.url),'utf8');
 const script=html.match(/<script>([\s\S]*)<\/script>/)[1];new vm.Script(script);
 assert(!html.includes('Koide2026'));assert(!html.includes("indexedDB.open('recepcion-maquinas-v1'"));assert(!html.includes("put(next,'main')"));assert(!html.includes('Ubaldo Sanchez'));
@@ -28,3 +30,11 @@ vm.runInContext("outbox=mockOutbox;serverRequest=mockRequest;serverSession={user
 context.next=next;await assert.rejects(vm.runInContext('serverCommit(next)',context),/Network lost/);assert(pending);assert.equal(writes,1);
 await vm.runInContext('sendServerPending()',context);assert.equal(pending,null);assert.equal(writes,1);assert.equal(requests[0],requests[1]);
 console.log('PASS: partitioned changes, versions, 20 independent additions, tombstones, retry ID after lost response, server HTML syntax, no local database fallback, originals unchanged.');
+
+// Renew both permissions for a queued edit without changing its request ID.
+const scopes=[];let cancel=true;
+context.ensureParameterSaveAccess=async scope=>{scopes.push(scope);if(cancel)throw Error('Cancelado')};
+pending={user:'domain\\operator',payload:{requestId:'pending-parameter-edit',changes:[{bucket:'bevelRecords',key:'REC-1',version:1,value:{id:'REC-1'}}]}};
+await assert.rejects(vm.runInContext('sendServerPending()',context),/Cancelado/);assert.equal(pending.payload.requestId,'pending-parameter-edit');assert.equal(writes,1);
+cancel=false;scopes.length=0;await vm.runInContext('sendServerPending()',context);assert.deepEqual(scopes,['parameters','admin']);assert.equal(pending,null);assert.equal(writes,2);assert.equal(requests.at(-1),'pending-parameter-edit');
+console.log('PASS: reintento de parámetros renueva permisos y conserva envío cuando se cancela.');

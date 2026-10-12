@@ -1,16 +1,18 @@
 import fs from 'node:fs';
+import {installAccessKeys} from '../src/auth.mjs';
 import {createPool} from '../src/db.mjs';
 const pool=createPool(),command=process.argv[2];
+async function updateKeys(){const sql=fs.readFileSync(new URL('../sql/003-access-keys.sql',import.meta.url),'utf8');for(const statement of sql.split(';').map(s=>s.trim()).filter(Boolean))await pool.query(statement);await installAccessKeys(pool)}
 try{
  if(command==='init'){
   const [tables]=await pool.execute('SHOW TABLES');if(tables.length)throw Error('La instalación requiere una base vacía. No se modificó ninguna tabla.');
   const sql=fs.readFileSync(new URL('../sql/001-create.sql',import.meta.url),'utf8').replace(/^--.*$/gm,'');const c=await pool.getConnection();
   try{for(const statement of sql.split(';').map(s=>s.trim()).filter(Boolean))await c.query(statement)}finally{c.release()}
-  console.log('Esquema 1 instalado.');
+  await updateKeys();console.log('Esquema 2 instalado.');
  }else if(command==='access'){
   const sql=fs.readFileSync(new URL('../sql/002-direct-access.sql',import.meta.url),'utf8').replace(/^--.*$/gm,'');
   for(const statement of sql.split(';').map(s=>s.trim()).filter(Boolean))await pool.query(statement);
-  console.log('Acceso directo habilitado. Registros existentes conservados.');
+  await updateKeys();console.log('Módulos y claves actualizados. Registros existentes conservados.');
  }else if(command==='employees'){
   const data=JSON.parse(fs.readFileSync(process.argv[3]||new URL('../data/employees.json',import.meta.url),'utf8').replace(/^\uFEFF/,''));
   const rows=Object.entries(data);if(!rows.length||rows.some(([id,name])=>!/^\d{1,40}$/.test(id)||typeof name!=='string'||!name.trim()||name.length>250))throw Error('Catálogo inválido. Usa un objeto JSON número: nombre.');

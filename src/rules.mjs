@@ -8,7 +8,7 @@ const arr=x=>Array.isArray(x)?x:[];
 const text=x=>typeof x==='string'&&x.trim().length>0;
 const close=(a,b)=>Number.isFinite(a)&&Number.isFinite(b)&&Math.abs(a-b)<1e-7;
 const day=x=>typeof x==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(x)&&!isNaN(Date.parse(x))&&new Date(x).toISOString().slice(0,10)===x;
-const buckets=['records','assignments','incidents','skillExams','skillMap.records','skillMap.employees','skillMap.meta','meta'];
+const buckets=['bevelRecords','records','assignments','incidents','skillExams','skillMap.records','skillMap.employees','skillMap.meta','meta'];
 export function checkRequest(request){
  requireValue(request&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(request.requestId)&&Array.isArray(request.changes)&&request.changes.length>0&&request.changes.length<=20000,'Solicitud inválida.');
  const seen=new Set();
@@ -16,7 +16,7 @@ export function checkRequest(request){
   requireValue(op&&buckets.includes(op.bucket)&&typeof op.key==='string'&&op.key.length<=160&&/^[A-Za-z0-9-]+$/.test(op.key)&&!seen.has(keyOf(op.bucket,op.key)),'Identificador inválido o duplicado.');seen.add(keyOf(op.bucket,op.key));
   requireValue(op.version===null||(Number.isSafeInteger(op.version)&&op.version>0),'Versión inválida.');
   requireValue(op.value===null||typeof op.value==='object'&&op.value!==undefined,'Contenido inválido.');
-  if(op.bucket==='meta')requireValue(['checklistConfig','customImages','checklistChanges','skillExamCatalog','skillDeletedRecords'].includes(op.key),'Configuración desconocida.');
+  if(op.bucket==='meta')requireValue(['bevelCatalog','checklistConfig','customImages','checklistChanges','skillExamCatalog','skillDeletedRecords'].includes(op.key),'Configuración desconocida.');
   if(op.bucket==='skillMap.meta')requireValue(op.key==='settings','Configuración desconocida.');
  }
 }
@@ -29,6 +29,12 @@ export function authorize(op,old,admin){
   requireValue(op.value.operation!=='Sin operación programada'&&arr(op.value.answers).length>0&&['id','machine','day','turn'].every(k=>old[k]===op.value[k])&&equal(old,op.value.initialStop),'La reactivación debe conservar el paro original.');return;
  }
  if(op.bucket==='incidents'&&old){
+  if(op.value.status==='Reparada'&&!['Reparada','Cerrada','Corregida'].includes(old.status)){
+   const after=op.value,allowed=['status','repairedAt','closed','repairedBy','repairEmployee','repairActivity','owner','events'];
+   const a=Object.fromEntries(Object.entries(old).filter(([k])=>!allowed.includes(k))),b=Object.fromEntries(Object.entries(after).filter(([k])=>!allowed.includes(k)));
+   const prior=arr(old.events),events=arr(after.events),event=events.at(-1);
+   if(equal(a,b)&&text(after.repairedBy)&&text(after.repairEmployee)&&text(after.repairActivity)&&text(after.repairedAt)&&!isNaN(Date.parse(after.repairedAt))&&after.closed===after.repairedAt&&after.owner===after.repairedBy&&events.length===prior.length+1&&prior.every((e,i)=>equal(e,events[i]))&&event.action==='Reparada'&&event.by===after.repairedBy&&event.employee===after.repairEmployee&&event.comment===after.repairActivity&&event.at===after.repairedAt)return;
+  }
   const {events:before=[],...a}=old,{events:after=[],...b}=op.value;
   if(equal(a,b)&&Array.isArray(after)&&after.length>before.length&&before.every((e,i)=>equal(e,after[i]))&&after.slice(before.length).every(e=>e.action==='Persiste en recepción'&&text(e.comment)))return;
  }
@@ -45,6 +51,8 @@ export function validate(entries,changes,admin,now=new Date()){
  for(const {bucket,key,value:r} of entries.values()){
   if(r===null)continue;
   if(['records','incidents','skillExams','skillMap.records'].includes(bucket))requireValue(r.id===key,'Identificador de registro inconsistente.');
+  if(bucket==='bevelRecords')requireValue(r.id===key&&/^Máquina Biseladora ([1-9]|1[0-9]|20)$/.test(r.machine)&&text(r.partNumber)&&/^[A-Za-z0-9._ /-]+$/.test(r.partNumber)&&typeof r.timestamp==='string'&&!isNaN(Date.parse(r.timestamp))&&['motorSpindle','camShaft','dimOD','dimID','dimLength'].every(k=>Number.isFinite(r[k])&&r[k]>=0)&&r.dimOD>r.dimID&&r.dimLength>0&&typeof r.notes==='string'&&r.notes.length<=2000,'Parámetros de biselado inválidos.');
+  if(bucket==='meta'&&key==='bevelCatalog')requireValue(!Array.isArray(r)&&Object.entries(r).every(([sku,p])=>/^[A-Za-z0-9._ /-]+$/.test(sku)&&p&&typeof p.raw==='string'&&typeof p.issue==='string'&&Array.isArray(p.dims)&&p.dims.length===3&&p.dims.every(d=>typeof d==='string')),'Catálogo de partes inválido.');
   if(bucket==='skillMap.employees')requireValue(r.employee===key&&text(r.name),'Asociado inválido.');
   if(['records','skillExams','skillMap.records'].includes(bucket))requireValue(text(r.employee)&&text(r.name)&&day(r.day),'Fecha o asociado incompleto.');
   if(bucket==='records'){

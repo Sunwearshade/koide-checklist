@@ -31,3 +31,14 @@ test('examen ponderado: captura válida y rechazo de score manipulado',()=>{
 test('contraseñas hash con sal y cookie protegida',async()=>{
  const a=await passwordHash('Contraseña-larga-123'),b=await passwordHash('Contraseña-larga-123');assert.notEqual(a,b);assert(await verifyPassword('Contraseña-larga-123',a));assert(!await verifyPassword('Incorrecta',a));assert(cookie('x').includes('HttpOnly; Secure; SameSite=Strict'));await assert.rejects(passwordHash('corta'));
 });
+
+test('reparar incidencia conserva origen, responsable e historial',()=>{
+ const before={id:'ng1',machine:'B1',status:'Abierta',comment:'Sin placa',events:[]},at='2026-10-08T12:00:00Z';
+ const repaired={...before,status:'Reparada',repairedAt:at,closed:at,repairedBy:'Persona',repairEmployee:'70',repairActivity:'Colocó placa',owner:'Persona',events:[{action:'Reparada',at,by:'Persona',employee:'70',comment:'Colocó placa'}]};
+ assert.doesNotThrow(()=>authorize(op(repaired,'incidents'),before,false));assert.throws(()=>authorize(op({...repaired,machine:'B2'},'incidents'),before,false));assert.throws(()=>authorize(op({...repaired,repairEmployee:''},'incidents'),before,false));
+});
+test('parámetros: campos numéricos y dimensiones coherentes',()=>{
+ const r={id:'REC-1',machine:'Máquina Biseladora 1',partNumber:'SKU-1',timestamp:'2026-10-08T12:00:00Z',motorSpindle:1500,camShaft:45,dimOD:84.2,dimID:72.4,dimLength:98,notes:''};
+ assert.doesNotThrow(()=>validate(snapshot([op(r,'bevelRecords')]),[],false));
+ for(const bad of [{dimID:90},{motorSpindle:-1},{dimLength:0},{machine:'Otra'},{timestamp:'ayer'},{partNumber:'<script>'}])assert.throws(()=>validate(snapshot([op({...r,...bad},'bevelRecords')]),[],false));
+});

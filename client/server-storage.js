@@ -24,12 +24,14 @@ async function serverCommit(next){
 async function sendServerPending(){
  const pending=await outbox(false);if(!pending)return;
  serverSession=await serverRequest('session');if(pending.user!==serverSession.user)throw Error('El envío pendiente pertenece a otra cuenta del sistema. Debe reintentarlo la misma cuenta.');
+ const parameters=pending.payload.changes.filter(op=>op.bucket==='bevelRecords'||op.bucket==='meta'&&op.key==='bevelCatalog');
+ if(parameters.length){await ensureParameterSaveAccess('parameters');if(parameters.some(op=>op.bucket==='meta'||op.version!==null&&op.value!==null))await ensureParameterSaveAccess('admin');}
  await serverRequest('changes',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-TOKEN':serverSession.csrf},body:JSON.stringify(pending.payload)});
  // Keep the outbox until the fresh snapshot is fetched. A retry uses the same ID.
  const fresh=await serverRead();state=fresh;await outbox(true,null);
 }
 async function drawServerStatus(){let el=document.getElementById('serverStatus');if(!el)return;let pending=await outbox(false);el.innerHTML=`<span>Servidor · ${serverSession?.isAdmin?'Administración habilitada':'Acceso directo'} ${pending?'· Envío pendiente':''}</span><div class="actions"><button type="button" id="serverRefresh">Actualizar datos</button>${serverSession?.isAdmin?'<button type="button" id="serverLock">Bloquear administración</button>':''}${pending?'<button type="button" class="primary" id="serverRetry">Reintentar envío</button><button type="button" id="serverReview">Revisar pendiente</button>':''}</div>`;
- if($('serverLock'))$('serverLock').onclick=async()=>{try{serverSession=await serverRequest('admin/lock',{method:'POST',headers:{'X-CSRF-TOKEN':serverSession.csrf}});await drawServerStatus();toast('Administración bloqueada.')}catch(e){toast(e.message)}};
+ if($('serverLock'))$('serverLock').onclick=async()=>{try{serverSession=await serverRequest('admin/lock',{method:'POST',headers:{'X-CSRF-TOKEN':serverSession.csrf}});accessGrants={};adminKey='';await drawServerStatus();toast('Administración bloqueada.')}catch(e){toast(e.message)}};
  $('serverRefresh').onclick=()=>modal('Actualizar datos','<p>Se recargarán los registros del servidor. Los campos que aún no hayas guardado se perderán.</p><button id="serverRefreshConfirm" class="primary">Actualizar</button>')||null;
  const originalRefresh=$('serverRefresh').onclick;$('serverRefresh').onclick=()=>{originalRefresh();$('serverRefreshConfirm').onclick=()=>location.reload()};
  if(pending){$('serverRetry').onclick=async()=>{if(serverBusy)return;serverBusy=true;try{await sendServerPending();applyChecklistConfig();show(activeView);toast('El servidor confirmó el guardado.')}catch(e){toast(e.message)}finally{serverBusy=false;await drawServerStatus()}};

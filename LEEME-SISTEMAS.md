@@ -44,15 +44,15 @@ npm test
 npm start
 ```
 
-La aplicación abre directamente para consultar y capturar. La clave administrativa es **Koide2026**. Se comprueba en Node con el hash de `data/access-config.json`; el HTML no contiene la clave. Cada función protegida solicita la clave y autoriza la sesión del navegador durante un máximo de 15 minutos para completar sus operaciones. «Bloquear administración» revoca esa autorización al terminar. Conservar este archivo de configuración junto al servicio.
+La aplicación abre directamente para consultar y capturar. Las claves iniciales son **Koide2026** para funciones protegidas, **Prod2026** para Actualización de parámetros y **K.oide2026** (con punto) para Administración de claves. Se verifican en Node contra hashes de la tabla `access_keys`; el archivo `data/access-config.json` solo proporciona los valores iniciales al instalar. El HTML no contiene las claves en texto legible. Cada función protegida solicita la clave y autoriza la sesión del navegador durante un máximo de 15 minutos para completar sus operaciones. «Bloquear administración» revoca esa autorización al terminar. Conservar este archivo de configuración junto al servicio.
 
-Si se instaló la versión anterior que pedía usuarios, ejecutar con permisos de creación de tablas:
+Para actualizar cualquier entrega anterior, detener Node, sustituir los archivos conservando `.env` y ejecutar con permisos de creación de tablas:
 
 ```powershell
 npm run update-access
 ```
 
-Este comando crea una tabla de sesiones de acceso directo sin borrar ni modificar capturas. No es necesario crear usuarios. Las tablas de cuentas anteriores pueden conservarse, pero ya no se consultan para entrar.
+Este comando instala sesiones de acceso directo, claves por módulo, autorizaciones y auditoría de cambios de claves (esquema 2), sin borrar capturas. Conserva las claves que ya existan en MySQL. No es necesario crear usuarios. Al terminar, reiniciar Node con la cuenta de ejecución y recargar la página en los equipos. Las tablas de cuentas anteriores pueden conservarse, pero ya no se consultan para entrar.
 
 `init-db` continúa exigiendo una base vacía; para actualizar una instalación existente usar únicamente `update-access`. Si la creación inicial falla a la mitad, Sistemas debe revisar el error antes de repetirla en una base nueva.
 
@@ -135,3 +135,45 @@ Esta función está incluida en el paquete del 29 de septiembre. Los cambios de 
 Recepción de máquina muestra KMD-PR38 Rev 0 discretamente en la esquina superior derecha de sus pantallas y checklist impreso, y como metadato en reportes Excel/CSV. Los menús y títulos no llevan código. El respaldo JSON incluye el código como metadato y mantiene la compatibilidad de restauración. Skill Map conserva sus nombres.
 
 En el checklist impreso, los turnos aplicables tienen círculos vacíos de 7 mm para marcar a mano; los no aplicables conservan un guion. Las imágenes permanecen junto al punto. Cada hoja lleva KMD-PR38 y se retiraron el subtítulo de programación, el contador de puntos y la revisión.
+
+
+## Actualización del 8 de octubre: recepción y parámetros
+
+- Recepción: se retiraron las cuatro tarjetas superiores. El selector ofrece los seis supervisores indicados por número y permite escribir quién cubre el turno.
+- Incidencias: el número de empleado aparece primero y completa el nombre con el catálogo. La reparación se puede registrar en acceso directo; el servidor solo admite esa transición con responsable, identificación, actividad, fecha e historial coherentes. Los demás campos de la incidencia se conservan.
+- Posibles checklists faltantes aparece antes de los filtros de Incidencias NG.
+- Actualización de parámetros contiene Registro de parámetros de biselado, basado en el HTML proporcionado. Incluye las 20 biseladoras, catálogo de partes y medidas, tabla, filtros, exportación y resumen con gráficas. Los recursos de interfaz van incluidos para no depender de internet.
+- Cada lectura de biselado se guarda como documento individual `bevelRecords` en MySQL, con versión, transacción, auditoría y reintento. El catálogo modificado se guarda en `meta/bevelCatalog`. Crear o eliminar registros exige acceso a parámetros; editar registros existentes o el catálogo exige además la clave de funciones protegidas.
+- Administración, al fondo del menú, permite cambiar por separado cualquiera de las tres claves. Solicita confirmar la nueva clave; usa versiones para evitar sobrescribir cambios desde otro equipo y revoca las autorizaciones abiertas cuando cambia una clave. Las claves nuevas se conservan en MySQL al reiniciar.
+
+El HTML local ofrece los mismos menús y conserva sus datos y cambios de claves en el navegador. No comparte automáticamente las claves con MySQL. En servidor, la protección se comprueba también en Node; en el archivo local es un control de interfaz.
+
+Los registros que pudieran estar guardados en el HTML independiente de biseladoras no se importan automáticamente. Se incorporó su catálogo incluido; las lecturas nuevas se guardan dentro de este sistema. Los registros anteriores de recepción y evaluaciones se conservan al actualizar la instalación existente.
+
+Se verificaron los flujos en un navegador aislado: supervisores y suplente, autocompletado en reparación, orden de tarjetas, acceso rechazado/aceptado, guardado y recarga de parámetros, tabla y resumen, cambio de clave y rechazo de la anterior. Se comprobó también el HTML de servidor con API simulada y su política de contenido. Las pruebas de reglas, cambios parciales, permisos y claves usan adaptadores simulados. **La prueba contra MySQL real y la instalación de IIS siguen pendientes de Sistemas.**
+
+En la aceptación, probar las tres claves desde dos equipos, cambiar una de ellas y comprobar que la anterior deja de autorizar. Capturar una lectura, reiniciar Node y MySQL y confirmar su persistencia. Ejecutar `npm run test:mysql` solo en una base de prueba vacía, como se indica arriba. No se agregó respaldo automático.
+
+
+## Corrección del 9 de octubre: autorización durante el guardado
+
+Si vence la autorización de parámetros durante una captura, Guardar solicita la clave en la misma pantalla y continúa la operación al confirmarla. No se recarga el formulario ni se descartan sus campos. Cancelar o ingresar una clave incorrecta no guarda ni limpia la captura. La edición y el catálogo también renuevan su autorización administrativa cuando corresponde. En servidor se consulta la autorización vigente y el reintento de un envío pendiente conserva su identificador para evitar duplicados.
+
+Se verificó la caducidad simulada en el HTML local y en el HTML de servidor con API simulada, incluyendo cancelación, clave incorrecta, guardado, edición y persistencia al recargar. La validación en MySQL real sigue a cargo de Sistemas. Para esta corrección, sustituir los archivos de la aplicación, conservar `.env` y reiniciar Node; si ya se instaló el esquema 2 del 8 de octubre, no se requiere migración adicional. Guardar o copiar los campos pendientes antes de recargar una página antigua.
+
+
+## Evaluaciones de medición: corrección de la secuencia julio–octubre
+
+El lote `data/measurement-2026-10-09.json` contiene 14 ciclos didácticos de cuatro aplicaciones: julio, agosto, septiembre y octubre. Se agregaron las 14 aplicaciones faltantes de septiembre. Las de octubre se distribuyen entre el 6 y el 8, dentro del rango autorizado del lunes 5 al jueves 8. Todos los días son de lunes a viernes, con intervalos de 29 a 31 días naturales. Las notas simuladas de septiembre y octubre aumentan gradualmente respecto de la nota anterior del ciclo, usando como base la calificación que ya mostraba el sistema. Los intentos adicionales de origen se conservan.
+
+Los identificadores de los registros corregidos permanecen iguales. Se conserva la fecha, hora, calificación y datos reportados de origen dentro de `scheduleOriginal`, visibles en Registro original. Las fechas ajustadas, notas simuladas y respuestas generadas se identifican con la prima discreta (′). Cada detalle del ciclo indica Aplicación 1, 2, 3 o 4 y el mes correspondiente. El libro `.xlsm` original no fue modificado.
+
+Para aplicar o actualizar el lote en MySQL, desde la carpeta del servicio con `.env` configurado:
+
+```powershell
+npm run import-measurements
+```
+
+Este comando también actualiza la versión anterior que colocaba las aplicaciones el 9 de octubre. Conserva nombres corregidos por el catálogo, otros módulos, criterios y eliminaciones. Comprueba que las fechas y calificaciones a corregir todavía coincidan con las de la entrega anterior; si alguien las editó, cancela el lote para revisión, sin escribir parcialmente. Una segunda ejecución no duplica las aplicaciones. No se utiliza Restaurar respaldo ni se vacía la base. Reiniciar Node para cargar la interfaz actualizada y recargar las estaciones después de guardar las capturas pendientes.
+
+En el HTML local el ajuste se aplica una sola vez al abrir la versión actualizada en la misma ubicación y navegador. Se verificaron tanto una carga nueva como la actualización desde el lote anterior, el detalle marcado, las cuatro rondas mensuales, los intervalos, la mejora de notas y la recarga sin duplicados. La ejecución del importador contra MySQL real sigue pendiente de Sistemas.

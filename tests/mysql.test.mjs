@@ -22,5 +22,13 @@ try{
  await save(pool,request([{bucket:'records',key:'r1',version:null,value}]),'admin',true);
  await assert.rejects(save(pool,request([{bucket:'records',key:'r2',version:null,value:{...value,id:'r2'}}]),'admin',true),e=>e.status===409);
  const [audit]=await pool.execute('SELECT COUNT(*) AS n FROM audit WHERE entity_key=?',['retry']);assert.equal(Number(audit[0].n),4);
- console.log('PASS MySQL: 20 conexiones concurrentes, idempotencia, versiones, rollback, roles, restauración, duplicados y auditoría.');
+ const bevel={bucket:'bevelRecords',key:'REC-MYSQL-1',version:null,value:{id:'REC-MYSQL-1',machine:'Máquina Biseladora 1',partNumber:'SKU-1',timestamp:new Date().toISOString(),motorSpindle:1500,camShaft:45,dimOD:84.2,dimID:72.4,dimLength:98,notes:'Prueba de instalación'}};
+ await assert.rejects(save(pool,request([bevel]),'capture',false,false),e=>e.status===403);
+ await save(pool,request([bevel]),'capture',false,true);
+ const changedBevel={...bevel,version:1,value:{...bevel.value,notes:'Actualizado'}};
+ await assert.rejects(save(pool,request([changedBevel]),'capture',false,true),e=>e.status===403);
+ await save(pool,request([changedBevel]),'admin',true,true);
+ assert.equal((await read(pool)).entries.find(e=>e.key===bevel.key).value.notes,'Actualizado');
+ const [keys]=await pool.execute('SELECT scope,revision FROM access_keys');assert.equal(keys.length,3);
+ console.log('PASS MySQL: 20 conexiones concurrentes, idempotencia, versiones, rollback, roles, restauración, duplicados, auditoría y parámetros.');
 }finally{await pool.end()}
