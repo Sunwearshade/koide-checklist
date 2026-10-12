@@ -1,7 +1,7 @@
 // Requires a separate EMPTY schema ending in _test, initialized with init-db.
 // Never deletes rows. A fresh test database is required for each run.
 import assert from 'node:assert/strict';import {randomUUID} from 'node:crypto';
-import {createPool} from '../src/db.mjs';import {save,read} from '../src/store.mjs';
+import {createPool} from '../src/db.mjs';import {save,read} from '../src/store.mjs';import {createUser,login,logout,session} from '../src/auth.mjs';
 if(!process.env.MYSQL_DATABASE?.endsWith('_test'))throw Error('Usa exclusivamente una base de pruebas con sufijo _test.');
 const pool=createPool();
 const request=changes=>({requestId:randomUUID(),changes});
@@ -29,6 +29,12 @@ try{
  await assert.rejects(save(pool,request([changedBevel]),'capture',false,true),e=>e.status===403);
  await save(pool,request([changedBevel]),'admin',true,true);
  assert.equal((await read(pool)).entries.find(e=>e.key===bevel.key).value.notes,'Actualizado');
- const [keys]=await pool.execute('SELECT scope,revision FROM access_keys');assert.equal(keys.length,3);
- console.log('PASS MySQL: 20 conexiones concurrentes, idempotencia, versiones, rollback, roles, restauración, duplicados, auditoría y parámetros.');
+ // Usuario y contraseña contra MySQL real: init-db ya creó admin-mant una sola vez (esquema 3).
+ const [initial]=await pool.execute("SELECT role,active,password_hash FROM users WHERE username='admin-mant'");assert.equal(initial.length,1);assert.equal(initial[0].role,'admin');assert(initial[0].password_hash.startsWith('scrypt:'));
+ const name='prueba-'+randomUUID().slice(0,8),secret='Prueba-'+randomUUID(),pc={headers:{},socket:{remoteAddress:'127.0.0.1'}},res={setHeader(_,value){pc.headers.cookie=value.split(';')[0]}};
+ await createUser(pool,{username:name,displayName:'Cuenta de prueba',role:'operator',password:secret});await assert.rejects(createUser(pool,{username:name,displayName:'Duplicada',role:'admin',password:secret}),e=>e.status===409);
+ await assert.rejects(login(pool,pc,res,{username:name,password:'incorrecta'}),e=>e.status===401);assert.equal(await session(pool,pc),null);
+ const opened=await login(pool,pc,res,{username:name,password:secret});assert.equal(opened.isAdmin,false);assert.equal((await session(pool,pc)).user,name);
+ await logout(pool,opened,res);pc.headers.cookie=pc.headers.cookie||'';assert.equal(await session(pool,pc),null);
+ console.log('PASS MySQL: 20 conexiones concurrentes, idempotencia, versiones, rollback, roles, restauración, duplicados, auditoría, parámetros y acceso por usuario.');
 }finally{await pool.end()}

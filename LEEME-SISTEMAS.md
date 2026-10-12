@@ -44,7 +44,28 @@ npm test
 npm start
 ```
 
-La aplicación abre directamente para consultar y capturar. Las claves iniciales son **Koide2026** para funciones protegidas, **Prod2026** para Actualización de parámetros y **K.oide2026** (con punto) para Administración de claves. Se verifican en Node contra hashes de la tabla `access_keys`; el archivo `data/access-config.json` solo proporciona los valores iniciales al instalar. El HTML no contiene las claves en texto legible. Cada función protegida solicita la clave y autoriza la sesión del navegador durante un máximo de 15 minutos para completar sus operaciones. «Bloquear administración» revoca esa autorización al terminar. Conservar este archivo de configuración junto al servicio.
+`init-db` crea además la cuenta inicial **`admin-mant`** (administrador de mantenimiento) y muestra **una sola vez** en la consola su contraseña inicial, generada al azar. Anotarla en ese momento: en MySQL solo queda su hash scrypt y no se puede recuperar. Para fijar una contraseña elegida por Sistemas en lugar de la generada, definir la variable `CHECKLIST_PASSWORD` únicamente durante ese comando (no guardarla en `.env`).
+
+## Acceso con usuario y contraseña
+
+La aplicación ya no abre directamente ni usa claves compartidas: muestra una pantalla de inicio de sesión y, sin sesión, el servidor responde 401 a todas las rutas de datos. Hay dos roles:
+
+- **Administrador de mantenimiento** (`admin`): captura y, además, todo lo que antes abrían las tres claves: editar, eliminar y restaurar registros, exportar respaldos, administrar checklists, Actualización de parámetros y gestión de usuarios.
+- **Operador** (`operator`): consulta y captura, igual que el antiguo acceso directo. No ve Actualización de parámetros ni Administración.
+
+Un administrador crea las demás cuentas (operadores u otros administradores), cambia contraseñas y activa o desactiva cuentas en **Administración > Usuarios**. Cada cuenta puede ser personal o de un puesto compartido; no está ligada al número de empleado, que se sigue capturando en cada registro como antes. Desactivar una cuenta o cambiar su contraseña cierra sus sesiones abiertas. No se eliminan cuentas, para conservar la referencia de la auditoría.
+
+Si se pierde la contraseña de un administrador, Sistemas la restablece desde la carpeta de la aplicación; el comando muestra la nueva contraseña una vez y cierra las sesiones de esa cuenta:
+
+```powershell
+npm run set-password -- admin-mant
+```
+
+`update-access` e `init-db` aplican también `sql/005-initial-users.sql`, que crea las cuentas de administrador **`sergio`** y **`omar`** con la contraseña inicial acordada (en el archivo solo está su hash scrypt). Si ya existen no las modifica. Deben cambiarla al entrar con «Cambiar contraseña», disponible para cualquier cuenta en la barra superior.
+
+**Restablecer con PIN.** En la pantalla de inicio, «Restablecer contraseña con PIN» (o la dirección `/restablecer`) permite fijar una contraseña nueva para cualquier cuenta activa escribiendo el usuario y el PIN definido en `RESET_PIN` dentro de `.env`. Si `RESET_PIN` está vacío, el restablecimiento queda desactivado. Agregar esa línea al `.env` de cada servidor y reiniciar Node. Quien conozca el PIN puede tomar cualquier cuenta, incluidas las de administrador: compartirlo solo con quien deba poder hacerlo. Cinco PIN incorrectos desde un mismo equipo bloquean el restablecimiento 15 minutos.
+
+Las rutas anteriores de claves (`/api/access/unlock`, `/api/access/keys`, `/api/admin/unlock`, `/api/admin/lock`) responden 410 y ya no autorizan nada. Las tablas `access_keys`, `access_grants`, `access_sessions` y `access_key_audit` se conservan sin uso; no se borran.
 
 Para actualizar cualquier entrega anterior, detener Node, sustituir los archivos conservando `.env` y ejecutar con permisos de creación de tablas:
 
@@ -52,7 +73,9 @@ Para actualizar cualquier entrega anterior, detener Node, sustituir los archivos
 npm run update-access
 ```
 
-Este comando instala sesiones de acceso directo, claves por módulo, autorizaciones y auditoría de cambios de claves (esquema 2), sin borrar capturas. Conserva las claves que ya existan en MySQL. No es necesario crear usuarios. Al terminar, reiniciar Node con la cuenta de ejecución y recargar la página en los equipos. Las tablas de cuentas anteriores pueden conservarse, pero ya no se consultan para entrar.
+Este comando aplica `sql/004-users.sql` (esquema 3): crea las tablas `users` y `user_sessions` y la cuenta inicial `admin-mant`, cuya contraseña muestra una sola vez. No borra capturas ni modifica tablas existentes. Es idempotente: si se repite, no duplica la cuenta ni cambia su contraseña. Al terminar, reiniciar Node con la cuenta de ejecución y recargar la página en los equipos; todos deberán iniciar sesión. Si un equipo tenía un «envío pendiente» guardado con el acceso directo anterior, debe revisarlo y retirarlo desde «Revisar pendiente», porque pertenece a otra cuenta.
+
+Para revertir: restaurar los archivos de la entrega anterior y, si se desea, ejecutar `DROP TABLE user_sessions; DROP TABLE users; DELETE FROM schema_version WHERE version=3;`. Ninguna otra tabla cambia.
 
 `init-db` continúa exigiendo una base vacía; para actualizar una instalación existente usar únicamente `update-access`. Si la creación inicial falla a la mitad, Sistemas debe revisar el error antes de repetirla en una base nueva.
 
@@ -76,9 +99,9 @@ La importación actualiza nombres coincidentes y agrega nuevos números en una t
 
 En el Excel original hay nueve nombres que ya contienen el carácter de reemplazo `�`. Se preservaron sin adivinar letras. `data/empleados-por-revisar.json` identifica esos números para que se corrijan en el catálogo y se vuelva a ejecutar la importación. No es un daño causado por MySQL.
 
-El número de empleado identifica al asociado de cada registro y completa su nombre. Ya no hay cuenta individual de ingreso: la auditoría del servicio usa «acceso-directo», y los datos del asociado permanecen dentro de cada captura. La clave compartida no identifica a una persona administradora concreta.
+El número de empleado identifica al asociado de cada registro y completa su nombre, y permanece dentro de cada captura. La cuenta de ingreso es independiente del catálogo de empleados: la auditoría del servicio (`audit.username`, `documents.updated_by`) registra ahora el usuario que inició sesión; los registros anteriores conservan «acceso-directo».
 
-La sesión técnica se crea automáticamente, con cookie HttpOnly/Secure, comprobación de origen y CSRF. La autorización administrativa vence a los 15 minutos y puede bloquearse antes. La sesión de captura dura hasta 30 días y se renueva automáticamente cuando vence.
+La sesión se crea al iniciar sesión, con cookie HttpOnly/Secure/SameSite=Strict, comprobación de origen y CSRF, y dura 12 horas; «Cerrar sesión» la invalida en el servidor. Si vence a media captura, la pantalla pide la contraseña de nuevo sin recargar y conserva lo capturado. Las contraseñas se guardan con scrypt y sal; nunca se registran en logs. Diez intentos fallidos para un mismo usuario desde un mismo equipo bloquean ese acceso durante 15 minutos (detrás de IIS, todos los equipos cuentan como uno).
 
 ## Migrar los registros actuales
 
@@ -118,9 +141,9 @@ npm run init-db
 npm run test:mysql
 ```
 
-Esa prueba inserta datos y exige una base sin documentos; no borra tablas. Comprueba 20 envíos concurrentes, reintentos, conflictos de versión, rollback, permisos, eliminación/restauración y duplicados. Después restaurar la configuración de la base de operación. Nunca ejecutar pruebas con credenciales o nombre de base de producción.
+Esa prueba inserta datos y exige una base sin documentos; no borra tablas. Comprueba 20 envíos concurrentes, reintentos, conflictos de versión, rollback, permisos, eliminación/restauración, duplicados y el acceso por usuario. `npm run test:http` levanta el servidor real en un puerto libre y comprueba por HTTP el inicio y cierre de sesión, el rechazo sin sesión, los roles y las rutas de claves retiradas; solo crea dos cuentas temporales `prueba-http-…` y las retira, sin escribir capturas. Se ejecuta en bases `_test`; en otra base de desarrollo exige `CHECKLIST_HTTP_TEST=si`. Después restaurar la configuración de la base de operación. Nunca ejecutar pruebas con credenciales o nombre de base de producción.
 
-Finalmente probar desde dos estaciones: acceso directo, rechazo de clave incorrecta, aceptación de Koide2026, nombre por número, captura por turno, paro/reactivación, incidencia NG, evaluación, modificación con clave administrativa y exportación/restauración en prueba. Interrumpir la conexión tras guardar y comprobar que «Reintentar envío» no duplica el registro. Cerrar y reiniciar Node y MySQL, verificar persistencia. Estos pasos constituyen la aceptación del despliegue, no están completados por generar el paquete.
+Finalmente probar desde dos estaciones: inicio de sesión con `admin-mant` y con un operador, rechazo de contraseña incorrecta, nombre por número, captura por turno, paro/reactivación, incidencia NG, evaluación, modificación con cuenta de administrador y exportación/restauración en prueba. Interrumpir la conexión tras guardar y comprobar que «Reintentar envío» no duplica el registro. Cerrar y reiniciar Node y MySQL, verificar persistencia. Estos pasos constituyen la aceptación del despliegue, no están completados por generar el paquete.
 
 Fuentes técnicas: [mysql2](https://sidorares.github.io/node-mysql2/docs), [MySQL JSON](https://dev.mysql.com/doc/refman/8.4/en/json.html), [Node crypto](https://nodejs.org/api/crypto.html).
 
