@@ -5,8 +5,8 @@ import {read,save} from './store.mjs';
 import {session,unlockAdmin,unlockScope,changeKey} from './auth.mjs';
 import {requireValue} from './rules.mjs';
 const origin=new URL(process.env.PUBLIC_ORIGIN||'https://invalid.local');
-// HTTP solo se acepta en localhost (desarrollo sin IIS). Cualquier otro host exige HTTPS.
-const local=origin.protocol==='http:'&&['localhost','127.0.0.1'].includes(origin.hostname);
+// HTTP se acepta en localhost y en IPs privadas de LAN (despliegue Koide por PM2 sin IIS). Hosts publicos exigen HTTPS.
+const local=origin.protocol==='http:'&&(['localhost','127.0.0.1'].includes(origin.hostname)||/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(origin.hostname));
 if((origin.protocol!=='https:'&&!local)||origin.host==='invalid.local'||origin.pathname!=='/')throw Error('Configura PUBLIC_ORIGIN con la dirección HTTPS de IIS, sin subcarpeta.');
 const pool=createPool(),max=Number(process.env.BODY_LIMIT_MB||64)*1024*1024;
 const page=fs.readFileSync(new URL('../public/index.html',import.meta.url));
@@ -47,5 +47,5 @@ const server=http.createServer(async(req,res)=>{
  }
 });
 server.requestTimeout=60000;server.headersTimeout=15000;
-server.listen(Number(process.env.PORT||3080),'127.0.0.1',()=>console.log(local?'Checklist MySQL listo. Abre: '+origin.origin:'Checklist MySQL listo en loopback. Acceso público: '+origin.origin));
+server.listen(Number(process.env.PORT||3080),process.env.HOST||'127.0.0.1',()=>console.log(local?'Checklist MySQL listo. Abre: '+origin.origin:'Checklist MySQL listo en loopback. Acceso público: '+origin.origin));
 for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>server.close(async()=>{await pool.end();process.exit(0)}));
