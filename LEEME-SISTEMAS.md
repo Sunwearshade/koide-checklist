@@ -48,12 +48,15 @@ npm start
 
 ## Acceso con usuario y contraseña
 
-La aplicación ya no abre directamente ni usa claves compartidas: muestra una pantalla de inicio de sesión y, sin sesión, el servidor responde 401 a todas las rutas de datos. Hay dos roles:
+La aplicación ya no abre directamente ni usa claves compartidas: muestra una pantalla de inicio de sesión y, sin sesión, el servidor responde 401 a todas las rutas de datos. Hay tres roles; el servidor toma el rol de la cuenta en cada solicitud, nunca de un dato enviado por el navegador:
 
 - **Administrador de mantenimiento** (`admin`): captura y, además, todo lo que antes abrían las tres claves: editar, eliminar y restaurar registros, exportar respaldos, administrar checklists, Actualización de parámetros y gestión de usuarios.
-- **Operador** (`operator`): consulta y captura, igual que el antiguo acceso directo. No ve Actualización de parámetros ni Administración.
+- **Supervisor** (`supervisor`): lo mismo que el operador y, además, Actualización de parámetros (equivale a la antigua clave de parámetros): registra parámetros nuevos; modificar parámetros existentes o su catálogo sigue exigiendo administrador. No ve Administración de checklist ni Usuarios, y no puede editar registros históricos.
+- **Operador** (`operator`): consulta y captura, igual que el antiguo acceso directo. No ve Actualización de parámetros, Administración de checklist ni Usuarios; en Historial consulta y exporta a Excel, pero no ve CSV, respaldo, restauración ni «Editar contenido».
 
-Un administrador crea las demás cuentas (operadores u otros administradores), cambia contraseñas y activa o desactiva cuentas en **Administración > Usuarios**. Cada cuenta puede ser personal o de un puesto compartido; no está ligada al número de empleado, que se sigue capturando en cada registro como antes. Desactivar una cuenta o cambiar su contraseña cierra sus sesiones abiertas. No se eliminan cuentas, para conservar la referencia de la auditoría.
+El menú oculta lo que no corresponde a cada rol y, además, el servidor responde 403 a cualquier intento directo: modificar o eliminar un registro existente, cambiar la configuración del checklist o gestionar usuarios sin ser administrador, y guardar parámetros sin ser supervisor o administrador.
+
+Un administrador crea las demás cuentas (operadores, supervisores u otros administradores), cambia su rol o su contraseña y activa o desactiva cuentas en **Administración > Usuarios**. Cada cuenta puede ser personal o de un puesto compartido; no está ligada al número de empleado, que se sigue capturando en cada registro como antes. Desactivar una cuenta, cambiar su rol o su contraseña cierra sus sesiones abiertas. No se eliminan cuentas, para conservar la referencia de la auditoría.
 
 Si se pierde la contraseña de un administrador, Sistemas la restablece desde la carpeta de la aplicación; el comando muestra la nueva contraseña una vez y cierra las sesiones de esa cuenta:
 

@@ -7,8 +7,8 @@ const derive=(password,salt)=>scrypt(password,salt,64,parameters);
 export async function passwordHash(password){requireValue(typeof password==='string'&&password.length>=8&&password.length<=256,'La contraseña debe tener entre 8 y 256 caracteres.');const salt=randomBytes(16).toString('hex');return `scrypt:${salt}:${(await derive(password,salt)).toString('hex')}`;}
 export async function verifyPassword(password,stored){const [method,salt,key]=String(stored||'').split(':');if(method!=='scrypt'||!salt||!key)return false;const actual=await derive(password,salt),expected=Buffer.from(key,'hex');return actual.length===expected.length&&timingSafeEqual(actual,expected);}
 export const generatePassword=()=>randomBytes(15).toString('base64url');
-// 'admin' es el administrador de mantenimiento: abre todo lo que antes abrían las tres claves. 'operator' solo captura.
-export const roles={admin:'Administrador de mantenimiento',operator:'Operador'};
+// 'admin' abre todo lo que antes abrían las tres claves. 'supervisor' captura y usa Actualización de parámetros (la antigua clave de parámetros). 'operator' solo captura.
+export const roles={admin:'Administrador de mantenimiento',supervisor:'Supervisor',operator:'Operador'};
 export const sessionHours=12;
 // Sin Secure únicamente cuando PUBLIC_ORIGIN es HTTP (localhost de desarrollo; server.mjs rechaza HTTP en otros hosts).
 const secure=String(process.env.PUBLIC_ORIGIN||'').startsWith('http://')?'':' Secure;';
@@ -16,7 +16,7 @@ export const cookie=(token,maxAge=sessionHours*3600)=>`checklist_session=${token
 export function tokenFrom(req){return /(?:^|;\s*)checklist_session=([a-f0-9]{64})(?:;|$)/.exec(req.headers.cookie||'')?.[1]||'';}
 export const normalizeUsername=value=>typeof value==='string'?value.trim().toLowerCase():'';
 const validUsername=name=>/^[a-z0-9][a-z0-9._-]{2,63}$/.test(name);
-const account=(row,extra={})=>({user:row.username,displayName:row.display_name,role:row.role,canWrite:true,isAdmin:row.role==='admin',canParameters:row.role==='admin',canManageKeys:row.role==='admin',...extra});
+const account=(row,extra={})=>({user:row.username,displayName:row.display_name,role:row.role,canWrite:true,isAdmin:row.role==='admin',canParameters:row.role==='admin'||row.role==='supervisor',canManageKeys:row.role==='admin',...extra});
 // Devuelve null sin sesión válida: ya no se crea ninguna sesión anónima.
 export async function session(pool,req){
  const token=tokenFrom(req);if(!token)return null;
@@ -80,6 +80,12 @@ export async function changePassword(pool,user,input){
 export async function setPassword(pool,username,password,keepTokenHash=''){
  const [result]=await pool.execute('UPDATE users SET password_hash=? WHERE username=?',[await passwordHash(password),normalizeUsername(username)]);requireValue(result.affectedRows===1,'Usuario desconocido.',404);
  await pool.execute('DELETE FROM user_sessions WHERE username=? AND token_hash<>?',[normalizeUsername(username),keepTokenHash]);
+}
+export async function setRole(pool,user,input){
+ requireAdmin(user);const username=normalizeUsername(input?.username);requireValue(Object.hasOwn(roles,input?.role),'Rol desconocido.');
+ requireValue(username!==user.user,'No puedes cambiar tu propio rol.',409);
+ const [result]=await pool.execute('UPDATE users SET role=? WHERE username=?',[input.role,username]);requireValue(result.affectedRows===1,'Usuario desconocido.',404);
+ await pool.execute('DELETE FROM user_sessions WHERE username=?',[username]);
 }
 export async function setActive(pool,user,input){
  requireAdmin(user);const username=normalizeUsername(input?.username);requireValue(typeof input?.active==='boolean','Estado inválido.');

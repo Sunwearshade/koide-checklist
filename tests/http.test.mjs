@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';import {spawn} from 'node:child_process'
 import {createPool} from '../src/db.mjs';import {createUser} from '../src/auth.mjs';import {hash} from '../src/store.mjs';
 if(!process.env.MYSQL_DATABASE?.endsWith('_test')&&process.env.CHECKLIST_HTTP_TEST!=='si')throw Error('Usa una base de pruebas con sufijo _test, o define CHECKLIST_HTTP_TEST=si en una base de desarrollo.');
 const port=await new Promise(resolve=>{const s=net.createServer().listen(0,'127.0.0.1',()=>{const p=s.address().port;s.close(()=>resolve(p))})}),origin='http://localhost:'+port;
-const pool=createPool(),tag=randomUUID().slice(0,8),adminName='prueba-http-a'+tag,operatorName='prueba-http-o'+tag,adminPassword='Admin-'+randomUUID(),operatorPassword='Oper-'+randomUUID();
+const pool=createPool(),tag=randomUUID().slice(0,8),adminName='prueba-http-a'+tag,operatorName='prueba-http-o'+tag,supervisorName='prueba-http-s'+tag,supervisorPassword='Super-'+randomUUID(),adminPassword='Admin-'+randomUUID(),operatorPassword='Oper-'+randomUUID();
 const server=spawn(process.execPath,['src/server.mjs'],{cwd:new URL('..',import.meta.url),env:{...process.env,PORT:String(port),HOST:'127.0.0.1',PUBLIC_ORIGIN:origin,RESET_PIN:'9911'},stdio:['ignore','pipe','pipe']});
 let logs='';server.stdout.on('data',d=>logs+=d);server.stderr.on('data',d=>logs+=d);
 function client(){let cookie='';return async(path,{method='GET',data,csrf,headers={}}={})=>{
@@ -14,6 +14,7 @@ const privateGets=['/api/session','/api/state','/api/employees','/api/users'];
 try{
  await createUser(pool,{username:adminName,displayName:'Prueba HTTP administrador',role:'admin',password:adminPassword});
  await createUser(pool,{username:operatorName,displayName:'Prueba HTTP operador',role:'operator',password:operatorPassword});
+ await createUser(pool,{username:supervisorName,displayName:'Prueba HTTP supervisor',role:'supervisor',password:supervisorPassword});
  for(let i=0;;i++){try{if((await fetch(origin+'/api/health')).ok)break}catch{}if(i>60)throw Error('El servidor no inició:\n'+logs);await new Promise(r=>setTimeout(r,250))}
  const [before]=await pool.execute('SELECT COUNT(*) AS n FROM documents');
 
@@ -59,6 +60,25 @@ try{
  assert.equal((await operator('/api/changes',{method:'POST',data:{},csrf:worker.body.csrf})).status,400);
  const bevel={requestId:randomUUID(),changes:[{bucket:'bevelRecords',key:'REC-HTTP-'+tag,version:null,value:{id:'REC-HTTP-'+tag}}]};
  assert.equal((await operator('/api/changes',{method:'POST',data:bevel,csrf:worker.body.csrf})).status,403);
+ // Historial y checklist: modificar un registro existente o la configuración del checklist exige administrador, también por HTTP directo.
+ const existing=visible.body.entries.find(e=>e.value!==null&&['records','skillMap.records','skillExams'].includes(e.bucket)),config=visible.body.entries.find(e=>e.bucket==='meta'&&e.key==='checklistConfig');
+ const forbidden=[{bucket:'meta',key:'checklistConfig',version:config?.version??null,value:{B:{items:[],revision:99}}}];
+ if(existing)forbidden.push({bucket:existing.bucket,key:existing.key,version:existing.version,value:{...existing.value,name:'Alterado'}},{bucket:existing.bucket,key:existing.key,version:existing.version,value:null});
+ // Supervisor: mismas restricciones que el operador, salvo Actualización de parámetros.
+ const supervisor=client(),chief=await supervisor('/api/login',{method:'POST',data:{username:supervisorName,password:supervisorPassword}});
+ assert.deepEqual([chief.body.role,chief.body.isAdmin,chief.body.canParameters,chief.body.canManageKeys,chief.body.canWrite],['supervisor',false,true,false,true]);
+ for(const [who,csrf] of [[operator,worker.body.csrf],[supervisor,chief.body.csrf]])for(const change of forbidden)assert.equal((await who('/api/changes',{method:'POST',csrf,data:{requestId:randomUUID(),changes:[change]}})).status,403,change.bucket);
+ assert.equal((await supervisor('/api/users')).status,403);
+ for(const [path,data] of [['/api/users',{username:'prueba-http-x'+tag,displayName:'X',role:'admin',password:'Intruso-2026'}],['/api/users/role',{username:supervisorName,role:'admin'}],['/api/users/active',{username:adminName,active:false}],['/api/users/password',{username:adminName,password:'Robada-2026'}]])assert.equal((await supervisor(path,{method:'POST',csrf:chief.body.csrf,data})).status,403,path);
+ // El mismo registro de parámetros que al operador se le niega (403) pasa la autorización del supervisor y llega a la validación de datos (400); no se guarda.
+ assert.equal((await supervisor('/api/changes',{method:'POST',data:{...bevel,requestId:randomUUID()},csrf:chief.body.csrf})).status,400);
+ // El rol no se puede enviar desde el cliente: se ignora cualquier valor ajeno a la sesión.
+ assert.equal((await operator('/api/users',{headers:{'X-Role':'admin'}})).status,403);assert.equal((await operator('/api/session?role=admin')).body.role,'operator');
+ // Cambiar el rol desde administración surte efecto en el servidor de inmediato y cierra la sesión de esa cuenta.
+ assert.equal((await admin('/api/users/role',{method:'POST',csrf:opened.body.csrf,data:{username:supervisorName,role:'operator'}})).status,200);assert.equal((await supervisor('/api/state')).status,401);
+ assert.equal((await supervisor('/api/login',{method:'POST',data:{username:supervisorName,password:supervisorPassword}})).body.canParameters,false);
+ assert.equal((await admin('/api/users/role',{method:'POST',csrf:opened.body.csrf,data:{username:adminName,role:'operator'}})).status,409);
+
  // El administrador restablece la contraseña del operador: su sesión abierta deja de servir.
  assert.equal((await admin('/api/users/password',{method:'POST',csrf:opened.body.csrf,data:{username:operatorName,password:'Restablecida-'+tag}})).status,200);
  assert.equal((await operator('/api/state')).status,401);
@@ -82,10 +102,10 @@ try{
 
  const [after]=await pool.execute('SELECT COUNT(*) AS n FROM documents');assert.equal(Number(after[0].n),Number(before[0].n),'La prueba no debe escribir capturas.');
  assert(!/Admin-|Oper-|scrypt:/.test(logs),'El servidor no debe registrar contraseñas ni hashes.');
- console.log('PASS HTTP: rutas privadas con 401 sin sesión, claves antiguas con 410, credenciales incorrectas y campos vacíos, origen y CSRF, sesión persistente, operador sin funciones administrativas ni parámetros, restablecer contraseña (administrador y PIN) cierra sesiones y cierre de sesión. Servidor y MySQL reales.');
+ console.log('PASS HTTP: rutas privadas con 401 sin sesión, claves antiguas con 410, credenciales incorrectas y campos vacíos, origen y CSRF, sesión persistente, operador y supervisor sin administración de checklist, edición de historial ni usuarios, supervisor con parámetros, cambio de rol, restablecer contraseña (administrador y PIN) cierra sesiones y cierre de sesión. Servidor y MySQL reales.');
 }finally{
  server.kill();
- for(const name of [adminName,operatorName]){await pool.execute('DELETE FROM user_sessions WHERE username=?',[name]);await pool.execute('DELETE FROM users WHERE username=?',[name]);
+ for(const name of [adminName,operatorName,supervisorName]){await pool.execute('DELETE FROM user_sessions WHERE username=?',[name]);await pool.execute('DELETE FROM users WHERE username=?',[name]);
   for(const address of ['127.0.0.1','::1','::ffff:127.0.0.1'])for(const key of ['login:'+name+':'+address,'reset:'+address])await pool.execute('DELETE FROM login_attempts WHERE attempt_key=?',[hash(key)])}
  await pool.end();
 }

@@ -2,7 +2,7 @@ import http from 'node:http';
 import fs from 'node:fs';
 import {createPool} from './db.mjs';
 import {read,save} from './store.mjs';
-import {session,login,logout,resetPassword,listUsers,createUser,changePassword,setActive} from './auth.mjs';
+import {session,login,logout,resetPassword,listUsers,createUser,changePassword,setActive,setRole} from './auth.mjs';
 import {requireValue} from './rules.mjs';
 const origin=new URL(process.env.PUBLIC_ORIGIN||'https://invalid.local');
 // HTTP se acepta en localhost y en IPs privadas de LAN (despliegue Koide por PM2 sin IIS). Hosts publicos exigen HTTPS.
@@ -42,6 +42,7 @@ const server=http.createServer(async(req,res)=>{
   if(path==='/api/users'&&req.method==='GET')return json(res,200,{users:await listUsers(pool,user)});
   if(path==='/api/users'&&req.method==='POST'){await createUser(pool,await body(req,8192),user);return json(res,200,{saved:true})}
   if(path==='/api/users/password'&&req.method==='POST'){await changePassword(pool,user,await body(req,8192));return json(res,200,{saved:true})}
+  if(path==='/api/users/role'&&req.method==='POST'){await setRole(pool,user,await body(req,8192));return json(res,200,{saved:true})}
   if(path==='/api/users/active'&&req.method==='POST'){await setActive(pool,user,await body(req,8192));return json(res,200,{saved:true})}
   if(path==='/api/employees'&&req.method==='GET'){const [rows]=await pool.execute('SELECT employee_number,full_name FROM employees WHERE active=1 ORDER BY employee_number');return json(res,200,{employees:Object.fromEntries(rows.map(r=>[r.employee_number,r.full_name]))})}
   if(path==='/api/state'&&req.method==='GET'){const data=await read(pool);if(!user.canParameters&&!user.isAdmin)data.entries=data.entries.filter(e=>e.bucket!=='bevelRecords'&&!(e.bucket==='meta'&&e.key==='bevelCatalog'));return json(res,200,data)}

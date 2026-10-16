@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {session,login,logout,resetPassword,listUsers,createUser,changePassword,setPassword,setActive,sessionHours} from '../src/auth.mjs';
+import {session,login,logout,resetPassword,listUsers,createUser,changePassword,setPassword,setActive,setRole,sessionHours} from '../src/auth.mjs';
 // Base simulada: usuarios, sesiones e intentos en memoria. Falla ante cualquier consulta no prevista.
 let users=new Map(),sessions=new Map(),attempts=new Map(),queries=[];
 const pool={async execute(sql,args=[]){
@@ -10,6 +10,7 @@ const pool={async execute(sql,args=[]){
  if(sql.startsWith('SELECT username FROM users WHERE username=? AND active=1')){const u=users.get(args[0]);return [u&&u.active?[u]:[]]}
  if(sql.startsWith('SELECT password_hash FROM users')){const u=users.get(args[0]);return [u?[u]:[]]}
  if(sql.startsWith('UPDATE users SET password_hash')){const u=users.get(args[1]);if(u)u.password_hash=args[0];return [{affectedRows:u?1:0}]}
+ if(sql.startsWith('UPDATE users SET role')){const u=users.get(args[1]);if(u)u.role=args[0];return [{affectedRows:u?1:0}]}
  if(sql.startsWith('UPDATE users SET active')){const u=users.get(args[1]);if(u)u.active=args[0];return [{affectedRows:u?1:0}]}
  if(sql.startsWith('INSERT INTO login_attempts')){attempts.set(args[0],(attempts.get(args[0])||0)+1);return [[]]}
  if(sql.startsWith('SELECT attempts'))return [[{attempts:attempts.get(args[0])}]];
@@ -60,12 +61,22 @@ await assert.rejects(createUser(pool,{username:'intruso',displayName:'X',role:'a
 await assert.rejects(setActive(pool,operator,{username:'admin-mant',active:false}),e=>e.status===403);
 await assert.rejects(changePassword(pool,operator,{username:'admin-mant',password:'Robada-2026'}),e=>e.status===403);
 assert.equal(users.size,2);assert(!users.has('intruso'));
+// Supervisor: captura y Actualización de parámetros; ni administración ni gestión de usuarios.
+await createUser(pool,{username:'supervisor1',displayName:'Supervisor T1',role:'supervisor',password:'Supervisor-2026'},admin);
+const office=browser('10.0.0.11'),supervisor=await enter(office,'supervisor1','Supervisor-2026');
+assert.deepEqual([supervisor.role,supervisor.isAdmin,supervisor.canParameters,supervisor.canManageKeys,supervisor.canWrite],['supervisor',false,true,false,true]);
+await assert.rejects(listUsers(pool,supervisor),e=>e.status===403);await assert.rejects(setRole(pool,supervisor,{username:'supervisor1',role:'admin'}),e=>e.status===403);
+await assert.rejects(setRole(pool,operator,{username:'operador1',role:'admin'}),e=>e.status===403);await assert.rejects(createUser(pool,{username:'intruso2',displayName:'X',role:'admin',password:'Intruso-2026'},supervisor),e=>e.status===403);
+// El rol sale de la base en cada solicitud: cambiarlo cierra la sesión y la siguiente entrada usa el rol nuevo. Nadie cambia su propio rol.
+await assert.rejects(setRole(pool,admin,{username:'admin-mant',role:'operator'}),e=>e.status===409);await assert.rejects(setRole(pool,admin,{username:'supervisor1',role:'jefe'}),e=>e.status===400);
+await setRole(pool,admin,{username:'supervisor1',role:'operator'});assert.equal(await session(pool,office.req),null);assert.equal((await enter(office,'supervisor1','Supervisor-2026')).canParameters,false);
+await setRole(pool,admin,{username:'supervisor1',role:'supervisor'});assert.equal((await enter(office,'supervisor1','Supervisor-2026')).canParameters,true);
 // Validaciones al crear: rol, usuario, nombre y contraseña.
 for(const bad of [{role:'root'},{username:'ab'},{username:'con espacio'},{displayName:' '},{password:'corta'}])await assert.rejects(createUser(pool,{username:'nuevo1',displayName:'Nuevo',role:'operator',password:'Valida-2026',...bad},admin),e=>e.status===400);
 // Más administradores de mantenimiento, creados por un administrador.
 await createUser(pool,{username:'admin-mant2',displayName:'Segundo administrador',role:'admin',password:'Segundo-2026'},admin);
 assert.equal((await enter(browser('10.0.0.7'),'admin-mant2','Segundo-2026')).isAdmin,true);
-assert.deepEqual((await listUsers(pool,admin)).map(u=>u.username).sort(),['admin-mant','admin-mant2','operador1']);assert(!JSON.stringify(await listUsers(pool,admin)).includes('scrypt'));
+assert.deepEqual((await listUsers(pool,admin)).map(u=>u.username).sort(),['admin-mant','admin-mant2','operador1','supervisor1']);assert(!JSON.stringify(await listUsers(pool,admin)).includes('scrypt'));
 
 // Cambio de contraseña: la propia exige la actual; la de otra cuenta cierra sus sesiones.
 await assert.rejects(changePassword(pool,operator,{username:'operador1',password:'Nueva-operador-1',currentPassword:'equivocada'}),e=>e.status===403);
@@ -102,4 +113,4 @@ const guesser=browser('10.0.0.67');for(let i=0;i<5;i++)await assert.rejects(rese
 await assert.rejects(reset(guesser,{username:'admin-mant',pin:'4477',password:'Robada-2026x'}),e=>e.status===429);await assert.rejects(enter(browser('10.0.0.68'),'admin-mant','Robada-2026x'),e=>e.status===401);
 await reset(kiosk,{username:'admin-mant',pin:'4477',password:adminPassword});
 assert(!queries.some(q=>/access_keys|access_grants|access_sessions/.test(q)),'Ninguna consulta usa las tablas de claves anteriores.');
-console.log('PASS: usuario y contraseña, cuenta inicial sin duplicar, campos vacíos, credenciales incorrectas, claves antiguas rechazadas, sesión persistente, operador sin funciones administrativas, alta de usuarios, cambio de contraseña, desactivación, cierre de sesión, restablecimiento con PIN y control de intentos. Base simulada.');
+console.log('PASS: usuario y contraseña, cuenta inicial sin duplicar, campos vacíos, credenciales incorrectas, claves antiguas rechazadas, sesión persistente, operador y supervisor sin funciones administrativas, cambio de rol, alta de usuarios, cambio de contraseña, desactivación, cierre de sesión, restablecimiento con PIN y control de intentos. Base simulada.');
