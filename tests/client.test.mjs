@@ -38,3 +38,12 @@ pending={user:'domain\\operator',payload:{requestId:'pending-parameter-edit',cha
 await assert.rejects(vm.runInContext('sendServerPending()',context),/Cancelado/);assert.equal(pending.payload.requestId,'pending-parameter-edit');assert.equal(writes,1);
 cancel=false;scopes.length=0;await vm.runInContext('sendServerPending()',context);assert.deepEqual(scopes,['parameters','admin']);assert.equal(pending,null);assert.equal(writes,2);assert.equal(requests.at(-1),'pending-parameter-edit');
 console.log('PASS: reintento de parámetros renueva permisos y conserva envío cuando se cancela.');
+
+// Un rechazo del servidor por regla (409, 400, 403 sin CSRF) retira el envío pendiente para no bloquear el equipo; un error de red lo conserva.
+for(const [status,message,kept] of [[409,'Ya existe recepción para esa máquina, fecha y turno.',false],[400,'El checklist cambió.',false],[403,'Esta modificación requiere administración.',false],[403,'La sesión cambió. Actualiza la página.',true],[503,'El servidor no pudo confirmar la operación.',true]]){
+ pending={user:'domain\\operator',payload:{requestId:'rechazo-'+status,changes:[{bucket:'records',key:'r1',version:null,value:{id:'r1'}}]}};
+ context.mockRequest=async path=>{if(path==='session')return {user:'domain\\operator',canWrite:true,csrf:'test'};if(path==='state')return {entries:[]};throw Object.assign(Error(message),{status})};vm.runInContext('serverRequest=mockRequest',context);
+ await assert.rejects(vm.runInContext('sendServerPending()',context),e=>e.message===message);
+ assert.equal(pending!==null,kept,status+' '+message);
+}
+console.log('PASS: rechazos del servidor no dejan envíos atorados; errores de red y de sesión se conservan para reintentar.');

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
-import {session,login,logout,resetPassword,listUsers,createUser,changePassword,setPassword,setActive,setRole,sessionHours} from '../src/auth.mjs';
+import {session,directSession,directUser,login,logout,resetPassword,listUsers,createUser,changePassword,setPassword,setActive,setRole,sessionHours} from '../src/auth.mjs';
 // Base simulada: usuarios, sesiones e intentos en memoria. Falla ante cualquier consulta no prevista.
-let users=new Map(),sessions=new Map(),attempts=new Map(),queries=[];
+let users=new Map(),sessions=new Map(),direct=new Map(),attempts=new Map(),queries=[];
 const pool={async execute(sql,args=[]){
  queries.push(sql);
  if(sql.startsWith('INSERT IGNORE INTO users')){if(users.has(args[0]))return [{affectedRows:0}];users.set(args[0],{username:args[0],display_name:args[1],role:args[2],password_hash:args[3],active:1});return [{affectedRows:1}]}
@@ -21,6 +21,9 @@ const pool={async execute(sql,args=[]){
  if(sql.startsWith('DELETE FROM user_sessions WHERE token_hash')){sessions.delete(args[0]);return [[]]}
  if(sql.startsWith('DELETE FROM user_sessions WHERE username=? AND token_hash<>?')){for(const [k,s] of sessions)if(s.username===args[0]&&k!==args[1])sessions.delete(k);return [[]]}
  if(sql.startsWith('DELETE FROM user_sessions WHERE username')){for(const [k,s] of sessions)if(s.username===args[0])sessions.delete(k);return [[]]}
+ if(sql.startsWith('SELECT csrf FROM access_sessions')){const s=direct.get(args[0]);return [s?[s]:[]]}
+ if(sql.startsWith('DELETE FROM access_sessions WHERE expires_at'))return [[]];
+ if(sql.startsWith('INSERT INTO access_sessions')){assert(sql.includes('INTERVAL 30 DAY'));direct.set(args[0],{csrf:args[1]});return [[]]}
  throw Error('Unexpected query: '+sql);
 }};
 const browser=(address='10.0.0.5')=>{const b={cookie:'',req:{headers:{},socket:{remoteAddress:address}},res:{setHeader(name,value){assert.equal(name,'Set-Cookie');b.cookie=value;b.req.headers.cookie=value.split(';')[0]}}};return b};
@@ -111,6 +114,23 @@ await assert.rejects(enter(tablet,'operador1','Restablecida-2026'),e=>e.status==
 // PIN corto: al sexto intento fallido desde un equipo se bloquea, incluso con el PIN correcto; otro equipo no.
 const guesser=browser('10.0.0.67');for(let i=0;i<5;i++)await assert.rejects(reset(guesser,{username:'admin-mant',pin:String(1000+i),password:'Robada-2026x'}),e=>e.status===403);
 await assert.rejects(reset(guesser,{username:'admin-mant',pin:'4477',password:'Robada-2026x'}),e=>e.status===429);await assert.rejects(enter(browser('10.0.0.68'),'admin-mant','Robada-2026x'),e=>e.status===401);
+// La cuenta atacada queda bloqueada 15 minutos aunque se intente desde otro equipo (detrás de IIS todos llegan desde la misma dirección).
+await assert.rejects(reset(kiosk,{username:'admin-mant',pin:'4477',password:adminPassword}),e=>e.status===429);
+attempts.clear(); // pasan los 15 minutos
 await reset(kiosk,{username:'admin-mant',pin:'4477',password:adminPassword});
-assert(!queries.some(q=>/access_keys|access_grants|access_sessions/.test(q)),'Ninguna consulta usa las tablas de claves anteriores.');
-console.log('PASS: usuario y contraseña, cuenta inicial sin duplicar, campos vacíos, credenciales incorrectas, claves antiguas rechazadas, sesión persistente, operador y supervisor sin funciones administrativas, cambio de rol, alta de usuarios, cambio de contraseña, desactivación, cierre de sesión, restablecimiento con PIN y control de intentos. Base simulada.');
+// Límite total: rotar cuentas y equipos no da más de 20 intentos en 15 minutos.
+attempts.clear();for(let i=0;i<20;i++)await assert.rejects(reset(browser('10.1.0.'+i),{username:'cuenta'+i,pin:'0000',password:'Robada-2026x'}),e=>e.status===403);
+await assert.rejects(reset(browser('10.1.1.1'),{username:'admin-mant',pin:'4477',password:'Robada-2026x'}),e=>e.status===429);attempts.clear();
+assert(!queries.some(q=>/access_keys|access_grants/.test(q)),'Ninguna consulta usa las tablas de claves anteriores.');
+
+// Acceso directo: sin sesión, cualquier equipo captura como operador; la cookie se conserva y nunca da permisos administrativos.
+const station=browser('10.0.0.70'),open1=await directSession(pool,station.req,station.res);
+assert.deepEqual([open1.user,open1.role,open1.direct,open1.canWrite,open1.isAdmin,open1.canParameters,open1.canManageKeys],[directUser,'operator',true,true,false,false,false]);
+assert(/^checklist_direct=[a-f0-9]{64}; HttpOnly; Secure; SameSite=Strict; Path=\/; Max-Age=2592000$/.test(station.cookie));assert(!direct.has(station.req.headers.cookie.split('=')[1]),'La base guarda el hash del token, no el token.');
+station.cookie='';const open2=await directSession(pool,station.req,station.res);assert.equal(open2.csrf,open1.csrf);assert.equal(station.cookie,'','La misma cookie no crea otra sesión.');
+assert.equal(await session(pool,station.req),null,'La cookie directa no abre ninguna cuenta.');
+const other=browser('10.0.0.71');assert.notEqual((await directSession(pool,other.req,other.res)).csrf,open1.csrf);
+await assert.rejects(listUsers(pool,open1),e=>e.status===403);await assert.rejects(createUser(pool,{username:'intruso2',displayName:'X',role:'admin',password:'Intruso-2026'},open1),e=>e.status===403);
+await assert.rejects(setRole(pool,open1,{username:'admin-mant',role:'operator'}),e=>e.status===403);
+await assert.rejects(createUser(pool,{username:directUser,displayName:'X',role:'operator',password:'Reservado-2026'},admin),e=>e.status===409);
+console.log('PASS: acceso directo para captura sin permisos administrativos, usuario y contraseña, cuenta inicial sin duplicar, campos vacíos, credenciales incorrectas, claves antiguas rechazadas, sesión persistente, operador y supervisor sin funciones administrativas, cambio de rol, alta de usuarios, cambio de contraseña, desactivación, cierre de sesión, restablecimiento con PIN y control de intentos. Base simulada.');

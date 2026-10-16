@@ -23,6 +23,27 @@ test('puntos comunes y de turno se validan en el servidor',()=>{
  assert.doesNotThrow(()=>validate(snapshot([op(r),config]),[op(r)],false,new Date('2026-09-28T14:00:00Z')));
  r.answers.pop();assert.throws(()=>validate(snapshot([op(r),config]),[op(r)],false,new Date('2026-09-28T14:00:00Z')),/faltan/);
 });
+test('captura sin administración: fotos solo como imagen, incidencias nacen de un NG y límites de tamaño',()=>{
+ const at=new Date('2026-09-28T14:00:00Z'),config={bucket:'meta',key:'checklistConfig',version:1,value:{B:{items:[{id:'1',shift:'General'}]}}};
+ const ng={...stop,id:'r9',operation:'Detenida por anomalía',answers:[{pointId:'1',value:'NG',comment:'Fuga',incidentId:'i9',photo:''}]};
+ const inc={id:'i9',machine:'B1',type:'B',pointId:'1',title:'Punto',comment:'Fuga',photo:'',created:'2026-09-28T14:00:00Z',day:'2026-09-28',turn:'T1',status:'Abierta',owner:'',recordId:'r9',events:[]};
+ const run=(r,i)=>validate(snapshot([op(r),op(i,'incidents'),config]),[op(r),op(i,'incidents')],false,at);
+ assert.doesNotThrow(()=>run(ng,inc));
+ // XSS en photo (se pinta como <img src>): rechazado en registro, incidencia o evento.
+ const xss='x" onerror="alert(1)';
+ assert.throws(()=>run({...ng,answers:[{...ng.answers[0],photo:xss}]},inc),/Foto inválida/);
+ assert.throws(()=>run(ng,{...inc,photo:xss}),/Foto inválida/);
+ assert.throws(()=>run(ng,{...inc,events:[{action:'x',photo:'javascript:alert(1)'}]}),/Foto inválida/);
+ assert.doesNotThrow(()=>run(ng,{...inc,photo:'data:image/png;base64,iVBORw0KGgo='}));
+ // La incidencia debe ser abierta, sin historial y de la misma recepción, máquina y punto.
+ for(const bad of [{status:'Cerrada'},{owner:'Alguien'},{events:[{action:'Reparada'}]},{recordId:'otro'},{pointId:'2'},{day:'2026-09-27'}])assert.throws(()=>run(ng,{...inc,...bad}),/nacer de un NG/,JSON.stringify(bad));
+ assert.throws(()=>validate(snapshot([op(inc,'incidents')]),[op(inc,'incidents')],false,at),/nacer de un NG/);
+ // Límites: documento enorme o demasiados cambios.
+ assert.throws(()=>run({...ng,extra:'x'.repeat(600*1024)},inc),/demasiado grande/);
+ assert.throws(()=>validate(new Map(),Array.from({length:201},(_,i)=>({bucket:'records',key:'k'+i,version:null,value:null})),false,at),/Demasiados/);
+ // Administración no tiene estos límites de flujo (correcciones, restauración).
+ assert.doesNotThrow(()=>validate(snapshot([op(ng),op({...inc,status:'Cerrada'},'incidents'),config]),[],true,at));
+});
 test('examen ponderado: captura válida y rechazo de score manipulado',()=>{
  const exam=defaults.exams[0],questions=exam.questions.map(q=>{const option=q.options[0];return {...q,selected:option.letter,points:option.points}}),earned=questions.reduce((s,q)=>s+q.points,0),max=questions.reduce((s,q)=>s+q.max,0);
  const r={id:'exam-1',employee:'1',name:'Persona',day:'2026-09-28',examId:exam.id,kind:exam.kind,area:exam.area,questions,earned,max,score:100*earned/max};

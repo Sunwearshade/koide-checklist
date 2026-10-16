@@ -17,11 +17,26 @@ export function tokenFrom(req){return /(?:^|;\s*)checklist_session=([a-f0-9]{64}
 export const normalizeUsername=value=>typeof value==='string'?value.trim().toLowerCase():'';
 const validUsername=name=>/^[a-z0-9][a-z0-9._-]{2,63}$/.test(name);
 const account=(row,extra={})=>({user:row.username,displayName:row.display_name,role:row.role,canWrite:true,isAdmin:row.role==='admin',canParameters:row.role==='admin'||row.role==='supervisor',canManageKeys:row.role==='admin',...extra});
-// Devuelve null sin sesión válida: ya no se crea ninguna sesión anónima.
+// Devuelve null sin sesión válida de cuenta; server.mjs usa entonces el acceso directo.
 export async function session(pool,req){
  const token=tokenFrom(req);if(!token)return null;
  const [rows]=await pool.execute('SELECT s.csrf,u.username,u.display_name,u.role FROM user_sessions s JOIN users u ON u.username=s.username WHERE s.token_hash=? AND s.expires_at>UTC_TIMESTAMP() AND u.active=1',[hash(token)]);
  return rows.length?account(rows[0],{csrf:rows[0].csrf,tokenHash:hash(token)}):null;
+}
+// Acceso directo: sin iniciar sesión, cualquier equipo de la planta consulta y captura en Recepción de máquinas,
+// como antes de las cuentas. Nunca da permisos de administración ni de parámetros: para eso se inicia sesión.
+export const directUser='acceso-directo';
+export const directCookie=(token,maxAge=30*86400)=>`checklist_direct=${token}; HttpOnly;${secure} SameSite=Strict; Path=/; Max-Age=${maxAge}`;
+export async function directSession(pool,req,res){
+ let token=/(?:^|;\s*)checklist_direct=([a-f0-9]{64})(?:;|$)/.exec(req.headers.cookie||'')?.[1]||'',rows=[];
+ if(token)[rows]=await pool.execute('SELECT csrf FROM access_sessions WHERE token_hash=? AND expires_at>UTC_TIMESTAMP()',[hash(token)]);
+ if(!rows.length){
+  token=randomBytes(32).toString('hex');rows=[{csrf:randomBytes(32).toString('hex')}];
+  await pool.execute('DELETE FROM access_sessions WHERE expires_at<UTC_TIMESTAMP()');
+  await pool.execute('INSERT INTO access_sessions(token_hash,csrf,expires_at) VALUES(?,?,UTC_TIMESTAMP()+INTERVAL 30 DAY)',[hash(token),rows[0].csrf]);
+  res.setHeader('Set-Cookie',directCookie(token));
+ }
+ return {user:directUser,displayName:'Acceso directo',role:'operator',direct:true,canWrite:true,isAdmin:false,canParameters:false,canManageKeys:false,csrf:rows[0].csrf,tokenHash:hash(token)};
 }
 const wrong=()=>requireValue(false,'Usuario o contraseña incorrectos.',401);
 // Hash de relleno: un usuario inexistente tarda lo mismo que una contraseña incorrecta.
@@ -48,14 +63,17 @@ export async function resetPassword(pool,req,input){
  const pin=process.env.RESET_PIN||'';requireValue(pin.length>0,'El restablecimiento con PIN no está configurado en este servidor.',503);
  const username=normalizeUsername(input?.username),given=['string','number'].includes(typeof input?.pin)?String(input.pin).trim():'';
  requireValue(username&&given,'Escribe tu usuario y el PIN.');requireValue(typeof input.password==='string'&&input.password.length>=8&&input.password.length<=256,'La contraseña debe tener entre 8 y 256 caracteres.');
- // El PIN es corto: 5 intentos fallidos por equipo bloquean el restablecimiento 15 minutos.
- const attemptKey=hash('reset:'+(req.socket?.remoteAddress||''));
- await pool.execute('INSERT INTO login_attempts(attempt_key,attempts,window_start) VALUES(?,1,UTC_TIMESTAMP()) ON DUPLICATE KEY UPDATE attempts=IF(window_start<UTC_TIMESTAMP()-INTERVAL 15 MINUTE,1,attempts+1),window_start=IF(window_start<UTC_TIMESTAMP()-INTERVAL 15 MINUTE,UTC_TIMESTAMP(),window_start)',[attemptKey]);
- const [attempts]=await pool.execute('SELECT attempts FROM login_attempts WHERE attempt_key=?',[attemptKey]);requireValue(attempts[0].attempts<=5,'Demasiados intentos. Espera 15 minutos.',429);
+ // El PIN es corto: 5 intentos fallidos por equipo o por cuenta, y 20 en total, bloquean el restablecimiento 15 minutos.
+ // El límite por cuenta y el total valen aunque detrás de IIS todas las solicitudes lleguen desde la misma dirección.
+ const attemptKey=hash('reset:'+(req.socket?.remoteAddress||'')),userKey=hash('reset-user:'+username),globalKey=hash('reset-global');
+ for(const [key,limit] of [[attemptKey,5],[userKey,5],[globalKey,20]]){
+  await pool.execute('INSERT INTO login_attempts(attempt_key,attempts,window_start) VALUES(?,1,UTC_TIMESTAMP()) ON DUPLICATE KEY UPDATE attempts=IF(window_start<UTC_TIMESTAMP()-INTERVAL 15 MINUTE,1,attempts+1),window_start=IF(window_start<UTC_TIMESTAMP()-INTERVAL 15 MINUTE,UTC_TIMESTAMP(),window_start)',[key]);
+  const [attempts]=await pool.execute('SELECT attempts FROM login_attempts WHERE attempt_key=?',[key]);requireValue(attempts[0].attempts<=limit,'Demasiados intentos. Espera 15 minutos.',429);
+ }
  requireValue(timingSafeEqual(Buffer.from(hash(given)),Buffer.from(hash(pin))),'PIN incorrecto.',403);
  const [rows]=await pool.execute('SELECT username FROM users WHERE username=? AND active=1',[username]);requireValue(rows.length===1,'Usuario desconocido o inactivo.',404);
  await setPassword(pool,username,input.password);
- await pool.execute('DELETE FROM login_attempts WHERE attempt_key=?',[attemptKey]);
+ for(const key of [attemptKey,userKey])await pool.execute('DELETE FROM login_attempts WHERE attempt_key=?',[key]);
 }
 
 const requireAdmin=user=>requireValue(user?.isAdmin===true,'Se requiere una cuenta de administrador de mantenimiento.',403);
@@ -64,7 +82,7 @@ export async function listUsers(pool,user){requireAdmin(user);const [rows]=await
 export async function createUser(pool,input,user){
  if(user!==undefined)requireAdmin(user);
  const username=normalizeUsername(input?.username),displayName=typeof input?.displayName==='string'?input.displayName.trim():'';
- requireValue(validUsername(username),'El usuario debe tener de 3 a 64 caracteres: letras, números, punto, guion o guion bajo.');
+ requireValue(validUsername(username),'El usuario debe tener de 3 a 64 caracteres: letras, números, punto, guion o guion bajo.');requireValue(username!==directUser,'Ese nombre está reservado para el acceso directo.',409);
  requireValue(Object.hasOwn(roles,input?.role),'Rol desconocido.');requireValue(displayName.length>0&&displayName.length<=120,'Escribe el nombre de la persona o del puesto.');
  const hashed=await passwordHash(input.password);
  const [result]=await pool.execute('INSERT IGNORE INTO users(username,display_name,role,password_hash) VALUES(?,?,?,?)',[username,displayName,input.role,hashed]);

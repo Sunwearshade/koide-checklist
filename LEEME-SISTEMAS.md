@@ -48,11 +48,13 @@ npm start
 
 ## Acceso con usuario y contraseña
 
-La aplicación ya no abre directamente ni usa claves compartidas: muestra una pantalla de inicio de sesión y, sin sesión, el servidor responde 401 a todas las rutas de datos. Hay tres roles; el servidor toma el rol de la cuenta en cada solicitud, nunca de un dato enviado por el navegador:
+La aplicación ya no usa claves compartidas, pero **la captura sigue abierta**: sin iniciar sesión, cualquier equipo de la planta abre la dirección del servidor y los operadores de producción consultan y capturan en Recepción de máquinas como antes («Acceso directo», con los mismos permisos que el rol operador; en la auditoría figura como `acceso-directo` y el número de empleado se sigue capturando en cada registro). La cookie del acceso directo dura 30 días y se guarda en la tabla `access_sessions`. Para Actualización de parámetros o Administración se usa el botón **Iniciar sesión** de la barra superior; sin sesión de cuenta, las rutas de usuarios responden 401. Si la sesión de una cuenta vence, la pantalla pide iniciar sesión de nuevo u ofrece «Continuar sin sesión (solo captura)».
+
+Hay tres roles de cuenta; el servidor toma el rol de la cuenta en cada solicitud, nunca de un dato enviado por el navegador:
 
 - **Administrador de mantenimiento** (`admin`): captura y, además, todo lo que antes abrían las tres claves: editar, eliminar y restaurar registros, exportar respaldos, administrar checklists, Actualización de parámetros y gestión de usuarios.
 - **Supervisor** (`supervisor`): lo mismo que el operador y, además, Actualización de parámetros (equivale a la antigua clave de parámetros): registra parámetros nuevos; modificar parámetros existentes o su catálogo sigue exigiendo administrador. No ve Administración de checklist ni Usuarios, y no puede editar registros históricos.
-- **Operador** (`operator`): consulta y captura, igual que el antiguo acceso directo. No ve Actualización de parámetros, Administración de checklist ni Usuarios; en Historial consulta y exporta a Excel, pero no ve CSV, respaldo, restauración ni «Editar contenido».
+- **Operador** (`operator`): consulta y captura, igual que el acceso directo. No ve Actualización de parámetros, Administración de checklist ni Usuarios; en Historial consulta y exporta a Excel, pero no ve CSV, respaldo, restauración ni «Editar contenido».
 
 El menú oculta lo que no corresponde a cada rol y, además, el servidor responde 403 a cualquier intento directo: modificar o eliminar un registro existente, cambiar la configuración del checklist o gestionar usuarios sin ser administrador, y guardar parámetros sin ser supervisor o administrador.
 
@@ -68,7 +70,7 @@ npm run set-password -- admin-mant
 
 **Restablecer con PIN.** En la pantalla de inicio, «Restablecer contraseña con PIN» (o la dirección `/restablecer`) permite fijar una contraseña nueva para cualquier cuenta activa escribiendo el usuario y el PIN definido en `RESET_PIN` dentro de `.env`. Si `RESET_PIN` está vacío, el restablecimiento queda desactivado. Agregar esa línea al `.env` de cada servidor y reiniciar Node. Quien conozca el PIN puede tomar cualquier cuenta, incluidas las de administrador: compartirlo solo con quien deba poder hacerlo. Cinco PIN incorrectos desde un mismo equipo bloquean el restablecimiento 15 minutos.
 
-Las rutas anteriores de claves (`/api/access/unlock`, `/api/access/keys`, `/api/admin/unlock`, `/api/admin/lock`) responden 410 y ya no autorizan nada. Las tablas `access_keys`, `access_grants`, `access_sessions` y `access_key_audit` se conservan sin uso; no se borran.
+Las rutas anteriores de claves (`/api/access/unlock`, `/api/access/keys`, `/api/admin/unlock`, `/api/admin/lock`) responden 410 y ya no autorizan nada. Las tablas `access_keys`, `access_grants` y `access_key_audit` se conservan sin uso; no se borran. `access_sessions` vuelve a usarse para el acceso directo.
 
 Para actualizar cualquier entrega anterior, detener Node, sustituir los archivos conservando `.env` y ejecutar con permisos de creación de tablas:
 
@@ -125,6 +127,18 @@ La validación y escritura usan un bloqueo corto compartido por las capturas. Es
 
 El navegador conserva solamente un envío pendiente sin confirmar, para reintentarlo desde ese navegador. No sustituye a MySQL ni funciona como respaldo central. Si no hay conexión, el usuario no recibe una confirmación falsa de guardado.
 
+## Validaciones del servidor para captura sin administración
+
+Además de los permisos por rol, el servidor aplica estas reglas a todo envío que no sea de una cuenta de administrador (incluido el acceso directo):
+
+- **Fotos:** el campo `photo` de recepciones, incidencias y sus eventos solo acepta vacío o una imagen JPG, PNG o WebP en base64. Cualquier otro texto se rechaza (evita que un envío anónimo inyecte código que se ejecute al abrir el registro).
+- **Incidencias nuevas:** solo nacen de un NG de una recepción nueva del mismo envío; deben quedar «Abierta», sin responsable ni historial, y con la misma máquina, fecha, turno y punto que el NG.
+- **Tamaño:** cuerpo de hasta 4 MB, 200 cambios por envío y 512 KB por registro. Las cuentas de administrador conservan `BODY_LIMIT_MB` para restauraciones.
+- **PIN de restablecimiento:** además de 5 intentos por equipo, 5 por cuenta y 20 en total cada 15 minutos. Detrás de IIS todas las solicitudes llegan desde la misma dirección, por eso el límite por cuenta y el total son los que protegen.
+- Las rutas fuera de `/api/` ya no abren sesión de acceso directo, y `skillDeletedRecords` (copias de evaluaciones eliminadas) solo se envía a administración.
+
+Si el servidor rechaza un envío por una de estas reglas (o por un duplicado o una versión desactualizada), el navegador ya no lo deja «pendiente»: muestra el motivo, lo retira y conserva la captura en pantalla para corregirla. Los errores de red y de sesión se siguen conservando para «Reintentar envío».
+
 ## Respaldos
 
 **No se instala ni se programa ningún respaldo automático**, conforme a la indicación de Sistemas. Se mantienen las opciones manuales de exportar/restaurar JSON para administradores. Ese JSON corresponde a los datos de aplicación, no incluye contraseñas, sesiones ni toda la auditoría SQL. El CSV es para consulta; no restaura el sistema.
@@ -146,9 +160,13 @@ npm run test:mysql
 
 Esa prueba inserta datos y exige una base sin documentos; no borra tablas. Comprueba 20 envíos concurrentes, reintentos, conflictos de versión, rollback, permisos, eliminación/restauración, duplicados y el acceso por usuario. `npm run test:http` levanta el servidor real en un puerto libre y comprueba por HTTP el inicio y cierre de sesión, el rechazo sin sesión, los roles y las rutas de claves retiradas; solo crea dos cuentas temporales `prueba-http-…` y las retira, sin escribir capturas. Se ejecuta en bases `_test`; en otra base de desarrollo exige `CHECKLIST_HTTP_TEST=si`. Después restaurar la configuración de la base de operación. Nunca ejecutar pruebas con credenciales o nombre de base de producción.
 
-Finalmente probar desde dos estaciones: inicio de sesión con `admin-mant` y con un operador, rechazo de contraseña incorrecta, nombre por número, captura por turno, paro/reactivación, incidencia NG, evaluación, modificación con cuenta de administrador y exportación/restauración en prueba. Interrumpir la conexión tras guardar y comprobar que «Reintentar envío» no duplica el registro. Cerrar y reiniciar Node y MySQL, verificar persistencia. Estos pasos constituyen la aceptación del despliegue, no están completados por generar el paquete.
+Finalmente probar desde dos estaciones: captura sin iniciar sesión (acceso directo), inicio de sesión con `admin-mant` y con un operador, rechazo de contraseña incorrecta, nombre por número, captura por turno, paro/reactivación, incidencia NG, evaluación, modificación con cuenta de administrador y exportación/restauración en prueba. Interrumpir la conexión tras guardar y comprobar que «Reintentar envío» no duplica el registro. Cerrar y reiniciar Node y MySQL, verificar persistencia. Estos pasos constituyen la aceptación del despliegue, no están completados por generar el paquete.
 
 Fuentes técnicas: [mysql2](https://sidorares.github.io/node-mysql2/docs), [MySQL JSON](https://dev.mysql.com/doc/refman/8.4/en/json.html), [Node crypto](https://nodejs.org/api/crypto.html).
+
+## Turno automático
+
+En Recepción de máquina el operador ya no selecciona el turno: la fecha operativa y el turno se toman de la hora, con la misma regla que koide-general (ADR-014, turno por instante, hora de planta America/Mexico_City): **T1 07:00–15:00 · T2 15:00–22:30 · T3 22:30–07:00**; en T3, después de medianoche, la fecha operativa es la del día anterior. La hora sale del servidor (encabezado `Date` de sus respuestas), no del reloj del equipo, así que un equipo con la hora mal configurada no registra otro turno. Si el turno cambia con la captura abierta, la pantalla se actualiza sola (cada 30 segundos) y avisa; si alguien intenta guardar justo en el cambio, se actualiza el turno y se pide revisar antes de guardar. La asignación de máquinas y la corrección de registros conservan el selector de turno.
 
 ## Impresión de checklists por turno
 
