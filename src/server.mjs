@@ -57,7 +57,7 @@ const server=http.createServer(async(req,res)=>{
   if(path==='/api/users/active'&&req.method==='POST'){await setActive(pool,user,await body(req,8192));return json(res,200,{saved:true})}
   if(path==='/api/employees'&&req.method==='GET'){const [rows]=await pool.execute('SELECT employee_number,full_name FROM employees WHERE active=1 ORDER BY employee_number');return json(res,200,{employees:Object.fromEntries(rows.map(r=>[r.employee_number,r.full_name]))})}
   if(path==='/api/state'&&req.method==='GET'){const data=await read(pool);if(!user.isAdmin)data.entries=data.entries.filter(e=>!(e.bucket==='meta'&&e.key==='skillDeletedRecords'));if(!user.canParameters&&!user.isAdmin)data.entries=data.entries.filter(e=>e.bucket!=='bevelRecords'&&!(e.bucket==='meta'&&e.key==='bevelCatalog'));return json(res,200,data)}
-  if(path==='/api/changes'&&req.method==='POST'){requireValue(user.canWrite,'La cuenta es de consulta.',403);const request=await body(req,user.isAdmin?max:Math.min(max,4*1024*1024));await save(pool,request,user.user,user.isAdmin,user.canParameters);return json(res,200,{saved:true,requestId:request.requestId})}
+  if(path==='/api/changes'&&req.method==='POST'){requireValue(user.canWrite,'La cuenta es de consulta.',403);const request=await body(req,user.isAdmin?max:Math.min(max,4*1024*1024));await save(pool,request,user.user,user.isAdmin,user.canParameters,{reviewer:user.isAdmin||user.role==='supervisor'});return json(res,200,{saved:true,requestId:request.requestId})}
   json(res,404,{error:'Recurso no encontrado.'});
  }catch(error){
   if(!error.status)console.error(new Date().toISOString(),error.code||error.name); // Never log passwords or application records.

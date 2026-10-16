@@ -14,7 +14,46 @@ const photoOk=x=>x===undefined||x===null||x===''||typeof x==='string'&&x.length<
 const photosOk=r=>[r,...arr(r.answers),...arr(r.events)].every(x=>!x||typeof x!=='object'||photoOk(x.photo));
 // Límites para cuentas sin administración (incluido el acceso directo): una captura normal es de pocos KB.
 export const limits={changes:200,document:512*1024};
-const buckets=['bevelRecords','records','assignments','incidents','skillExams','skillMap.records','skillMap.employees','skillMap.meta','meta'];
+const buckets=['bevelRecords','records','assignments','incidents','skillExams','skillMap.records','skillMap.employees','skillMap.meta','meta','gapReviews'];
+// Avisos de revisión («Posibles checklists faltantes»): el aviso se calcula en el cliente a partir de las recepciones;
+// su seguimiento se guarda en gapReviews, una entrada por fecha + máquina + turno, con historial al que solo se agrega.
+// Cerrar un aviso nunca cambia su condición: una máquina solo cuenta como revisada si alguien elige esa condición.
+export const REVIEW_CONDITIONS={'pending':'Sin determinar','no-anomalies':'Máquina sin anomalías','anomalies':'Se detectaron anomalías','not-performed':'No se realizó la revisión','not-captured':'No se capturó la revisión en el sistema'};
+export const REVIEW_ACTIONS=['Editar','Cambiar condición','Cerrar'];
+const REVIEW_FIELDS=['condition','status','observation','reviewer','closeNote'];
+const REVIEW_START={condition:'pending',status:'Abierto',observation:'',reviewer:'',closeNote:''};
+export const reviewKey=(day,machine,turn)=>`GAP-${day}-${machine}-${turn}`;
+// Fin del turno en hora de planta (UTC-6, sin horario de verano): T3 termina a las 07:00 del día siguiente.
+export function shiftEnd(day,turn){const base=Date.parse(day+'T00:00:00-06:00');return base+({T1:15*60,T2:22*60+30,T3:31*60}[turn])*60000}
+const pick=r=>Object.fromEntries(REVIEW_FIELDS.map(k=>[k,r?.[k]??REVIEW_START[k]]));
+const shortText=(x,max)=>typeof x==='string'&&x.length<=max;
+function validateReview(r,key){
+ requireValue(r.id===key&&day(r.day)&&defaults.machines.some(m=>m.id===r.machine)&&['T1','T2','T3'].includes(r.turn)&&key===reviewKey(r.day,r.machine,r.turn),'Aviso de revisión inválido.');
+ requireValue(Object.hasOwn(REVIEW_CONDITIONS,r.condition)&&['Abierto','Cerrado'].includes(r.status)&&shortText(r.observation,2000)&&shortText(r.reviewer,120)&&shortText(r.closeNote,2000),'Condición, estado u observación inválidos.');
+ const history=arr(r.history);requireValue(history.length>0&&history.every(e=>e&&typeof e.at==='string'&&!isNaN(Date.parse(e.at))&&text(e.account)&&REVIEW_ACTIONS.includes(e.action)&&e.before&&e.after&&shortText(e.comment??'',2000)),'Historial del aviso inválido.');
+ if(r.status==='Cerrado')requireValue(text(r.closedBy)&&typeof r.closedAt==='string'&&!isNaN(Date.parse(r.closedAt))&&(r.condition==='no-anomalies'||text(r.closeNote)),'Para cerrar el aviso escribe una observación.');
+}
+// Transición de un aviso para cuentas sin administración: un solo paso por envío, registrado en el historial con la cuenta del servidor.
+export function reviewTransition(old,r,{user,reviewer,records=[],now=new Date()}){
+ requireValue(reviewer===true,'Gestionar avisos de revisión requiere una cuenta de supervisor o de administrador.',403);
+ if(old)requireValue(old.status==='Abierto','El aviso ya está cerrado.',409);
+ else{
+  requireValue(shiftEnd(r.day,r.turn)<=now.getTime(),'El turno aún no termina; no hay aviso que revisar.',409);
+  requireValue(!records.some(x=>x&&x.machine===r.machine&&x.day===r.day&&x.turn===r.turn),'Ese turno ya tiene recepción registrada; no hay aviso que revisar.',409);
+ }
+ const prior=arr(old?.history),history=arr(r.history),entry=history.at(-1);
+ requireValue(history.length===prior.length+1&&prior.every((e,i)=>equal(e,history[i])),'El historial del aviso no se puede modificar ni eliminar.',403);
+ requireValue(entry.account===user&&Math.abs(Date.parse(entry.at)-now.getTime())<=15*60000,'El cambio debe quedar a nombre de tu cuenta y con la hora actual.',403);
+ const before=pick(old),after=pick(r);
+ requireValue(equal(entry.before,before)&&equal(entry.after,after),'El historial no coincide con el cambio.',403);
+ if(old)for(const k of Object.keys(old))if(!REVIEW_FIELDS.includes(k)&&!['history','closedAt','closedBy','updatedAt','updatedBy'].includes(k))requireValue(equal(old[k],r[k]),'Solo se puede cambiar la condición, la observación, quién revisó o el cierre.',403);
+ requireValue(r.updatedAt===entry.at&&r.updatedBy===user,'Falta registrar quién hizo el cambio.',403);
+ const changed=REVIEW_FIELDS.filter(k=>!equal(before[k],after[k]));
+ if(entry.action==='Editar')requireValue(changed.length>0&&changed.every(k=>['observation','reviewer'].includes(k)),'Editar solo cambia la observación o quién revisó.');
+ if(entry.action==='Cambiar condición')requireValue(equal(changed,['condition'])&&after.condition!=='pending','Elige una condición distinta a la actual.');
+ if(entry.action==='Cerrar')requireValue(after.status==='Cerrado'&&changed.every(k=>['status','closeNote'].includes(k))&&r.closedAt===entry.at&&r.closedBy===user,'Cerrar no cambia la condición ni otros datos del aviso.');
+ else requireValue(after.status==='Abierto'&&r.closedAt===undefined&&r.closedBy===undefined,'Solo la acción Cerrar cierra el aviso.');
+}
 export function checkRequest(request){
  requireValue(request&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(request.requestId)&&Array.isArray(request.changes)&&request.changes.length>0&&request.changes.length<=20000,'Solicitud inválida.');
  const seen=new Set();
@@ -29,7 +68,7 @@ export function checkRequest(request){
 export function authorize(op,old,admin){
  if(admin)return;
  requireValue(op.value!==null,'Eliminar requiere administración.',403);
- if(op.bucket==='skillMap.employees')return;
+ if(op.bucket==='skillMap.employees'||op.bucket==='gapReviews')return;
  if(!old&&['records','incidents','skillExams','skillMap.records'].includes(op.bucket))return;
  if(op.bucket==='records'&&old?.operation==='Sin operación programada'&&!arr(old.answers).length){
   requireValue(op.value.operation!=='Sin operación programada'&&arr(op.value.answers).length>0&&['id','machine','day','turn'].every(k=>old[k]===op.value[k])&&equal(old,op.value.initialStop),'La reactivación debe conservar el paro original.');return;
@@ -51,13 +90,14 @@ export function operationalTime(now=new Date()){
  const minutes=Number(p.hour)*60+Number(p.minute),d=new Date(`${p.year}-${p.month}-${p.day}T12:00:00Z`);if(minutes<420)d.setUTCDate(d.getUTCDate()-1);
  return {day:d.toISOString().slice(0,10),turn:minutes>=420&&minutes<900?'T1':minutes>=900&&minutes<1350?'T2':'T3'};
 }
-export function validate(entries,changes,admin,now=new Date()){
+export function validate(entries,changes,admin,now=new Date(),context={}){
  const get=(b,k)=>entries.get(keyOf(b,k))?.value;
  const receipts=new Set();
  for(const {bucket,key,value:r} of entries.values()){
   if(r===null)continue;
   if(['records','incidents','skillExams','skillMap.records'].includes(bucket))requireValue(r.id===key,'Identificador de registro inconsistente.');
   if(['records','incidents'].includes(bucket))requireValue(photosOk(r),'Foto inválida: solo se aceptan imágenes JPG, PNG o WebP.');
+  if(bucket==='gapReviews')validateReview(r,key);
   if(bucket==='bevelRecords')requireValue(r.id===key&&/^Máquina Biseladora ([1-9]|1[0-9]|20)$/.test(r.machine)&&text(r.partNumber)&&/^[A-Za-z0-9._ /-]+$/.test(r.partNumber)&&typeof r.timestamp==='string'&&!isNaN(Date.parse(r.timestamp))&&['motorSpindle','camShaft','dimOD','dimID','dimLength'].every(k=>Number.isFinite(r[k])&&r[k]>=0)&&r.dimOD>r.dimID&&r.dimLength>0&&typeof r.notes==='string'&&r.notes.length<=2000,'Parámetros de biselado inválidos.');
   if(bucket==='meta'&&key==='bevelCatalog')requireValue(!Array.isArray(r)&&Object.entries(r).every(([sku,p])=>/^[A-Za-z0-9._ /-]+$/.test(sku)&&p&&typeof p.raw==='string'&&typeof p.issue==='string'&&Array.isArray(p.dims)&&p.dims.length===3&&p.dims.every(d=>typeof d==='string')),'Catálogo de partes inválido.');
   if(bucket==='skillMap.employees')requireValue(r.employee===key&&text(r.name),'Asociado inválido.');
@@ -102,6 +142,7 @@ export function validate(entries,changes,admin,now=new Date()){
    for(let i=0;i<exam.questions.length;i++){const q=exam.questions[i],a=r.questions[i],weight=q.weight??q.max,selected=q.options.find(o=>o.letter===a.selected);requireValue(q.id===a.id&&q.text===a.text&&close(weight,a.max)&&selected,'Reactivo o ponderación modificados.');const raw=selected.points??({A:10,B:8,C:6,D:0}[selected.letter]);requireValue(close(raw/q.max*weight,a.points),'Puntaje diferente al autorizado.');}
   }
   if(op.bucket==='skillMap.records')validateMeasurement(r,get('skillMap.meta','settings')?.criteria);
+  if(op.bucket==='gapReviews')reviewTransition(context.previous?.get(keyOf(op.bucket,op.key))?.value??null,r,{user:context.user,reviewer:context.reviewer,records:[...entries.values()].filter(e=>e.bucket==='records').map(e=>e.value),now});
  }
 }
 export function validateMeasurement(r,profile){

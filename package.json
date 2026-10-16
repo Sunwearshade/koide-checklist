@@ -10,7 +10,7 @@
     "start": "node --env-file=.env src/server.mjs",
     "init-db": "node --env-file=.env scripts/manage.mjs init",
     "import-employees": "node --env-file=.env scripts/manage.mjs employees",
-    "test": "node tests/rules.test.mjs && node tests/client.test.mjs && node tests/access.test.mjs && node tests/parameters.test.mjs && node tests/measurement-import.test.mjs",
+    "test": "node tests/rules.test.mjs && node tests/client.test.mjs && node tests/access.test.mjs && node tests/parameters.test.mjs && node tests/measurement-import.test.mjs && node tests/review.test.mjs",
     "test:mysql": "node --env-file=.env tests/mysql.test.mjs",
     "test:http": "node --env-file=.env tests/http.test.mjs",
     "update-access": "node --env-file=.env scripts/manage.mjs access",

@@ -139,6 +139,16 @@ Además de los permisos por rol, el servidor aplica estas reglas a todo envío q
 
 Si el servidor rechaza un envío por una de estas reglas (o por un duplicado o una versión desactualizada), el navegador ya no lo deja «pendiente»: muestra el motivo, lo retira y conserva la captura en pantalla para corregirla. Los errores de red y de sesión se siguen conservando para «Reintentar envío».
 
+## Avisos de revisión («Posibles checklists faltantes»)
+
+En Incidencias NG, el panel «Posibles checklists faltantes» lista turnos terminados sin recepción en máquinas que sí tuvieron checklist en otro turno del mismo día. El aviso se sigue calculando a partir de las recepciones; su seguimiento se guarda en `documents` con `bucket='gapReviews'`, una entrada por fecha + máquina + turno (clave `GAP-AAAA-MM-DD-MÁQUINA-TURNO`), por lo que no puede haber duplicados. No se agregaron tablas.
+
+- **Editar:** cambia la observación y quién revisó.
+- **Condición:** «Máquina sin anomalías», «Se detectaron anomalías», «No se realizó la revisión» o «No se capturó la revisión en el sistema». Mientras nadie la elija, el aviso queda «Sin determinar».
+- **Cerrar:** pide observación salvo cuando la condición es «Máquina sin anomalías». Cerrar **no** cambia la condición: un aviso cerrado sin condición queda «Sin determinar», nunca como máquina revisada. Un aviso cerrado ya no se modifica.
+- **Historial:** cada cambio agrega una entrada con la cuenta del servidor, la hora y los valores anteriores y nuevos; además queda en la tabla `audit`. El historial no se puede borrar ni alterar.
+- **Permisos:** supervisores y administradores gestionan los avisos; operadores y acceso directo los consultan. El servidor lo exige (403) aunque se intente por la API.
+
 ## Respaldos
 
 **No se instala ni se programa ningún respaldo automático**, conforme a la indicación de Sistemas. Se mantienen las opciones manuales de exportar/restaurar JSON para administradores. Ese JSON corresponde a los datos de aplicación, no incluye contraseñas, sesiones ni toda la auditoría SQL. El CSV es para consulta; no restaura el sistema.
