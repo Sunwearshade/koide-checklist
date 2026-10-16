@@ -8,6 +8,10 @@ const origin=new URL(process.env.PUBLIC_ORIGIN||'https://invalid.local');
 // HTTP se acepta en localhost y en IPs privadas de LAN (despliegue Koide por PM2 sin IIS). Hosts publicos exigen HTTPS.
 const local=origin.protocol==='http:'&&(['localhost','127.0.0.1'].includes(origin.hostname)||/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(origin.hostname));
 if((origin.protocol!=='https:'&&!local)||origin.host==='invalid.local'||origin.pathname!=='/')throw Error('Configura PUBLIC_ORIGIN con la dirección HTTPS de IIS, sin subcarpeta.');
+// EXTRA_ORIGINS: otras direcciones del mismo servidor (p. ej. segunda tarjeta de red), separadas por coma. Mismas reglas que PUBLIC_ORIGIN.
+const isLocalHttp=u=>u.protocol==='http:'&&(['localhost','127.0.0.1'].includes(u.hostname)||/^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(u.hostname));
+const origins=[origin,...String(process.env.EXTRA_ORIGINS||'').split(',').map(s=>s.trim()).filter(Boolean).map(s=>new URL(s))];
+for(const o of origins)if((o.protocol!=='https:'&&!isLocalHttp(o))||o.pathname!=='/')throw Error(`EXTRA_ORIGINS inválido: ${o.href}`);
 const pool=createPool(),max=Number(process.env.BODY_LIMIT_MB||64)*1024*1024;
 const page=fs.readFileSync(new URL('../public/index.html',import.meta.url));
 const json=(res,status,data)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8'});res.end(JSON.stringify(data))};
@@ -22,9 +26,10 @@ const server=http.createServer(async(req,res)=>{
  try{
   const path=new URL(req.url,origin).pathname;
   // IIS preserves the original Host. Node cannot be reached directly from the LAN.
-  requireValue(req.headers.host===origin.host,'Dirección no autorizada.',403);
+  const allowed=origins.find(o=>o.host===req.headers.host);
+  requireValue(allowed,'Dirección no autorizada.',403);
   if(!['GET','POST'].includes(req.method))return json(res,405,{error:'Método no permitido.'});
-  if(req.method==='POST')requireValue(req.headers.origin===origin.origin,'Origen no autorizado.',403);
+  if(req.method==='POST')requireValue(req.headers.origin===allowed.origin,'Origen no autorizado.',403);
   if((path==='/'||path==='/index.html')&&req.method==='GET'){res.setHeader('Content-Type','text/html; charset=utf-8');return res.end(page)}
   if(path==='/login'&&req.method==='GET'){res.writeHead(302,{Location:'/'});return res.end()}
   if(path==='/restablecer'&&req.method==='GET'){res.writeHead(302,{Location:'/#restablecer'});return res.end()}
